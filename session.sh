@@ -462,5 +462,9 @@ aws_session() {
     clear_terminal
     create_and_display_table "$response" "$AWS_REGION"
 
-    export PROMPT="%F{cyan}[${AWS_PROFILE}:${AWS_DEFAULT_REGION}]%f ${PROMPT}"
+    # Save original PROMPT if not already saved
+    if [ -z "$ORG_PROMPT" ]; then
+        export ORG_PROMPT="$(echo "$PROMPT" | sed '/./,$!d')"
+    fi
+    export PROMPT="%F{cyan}[${AWS_PROFILE}:${AWS_DEFAULT_REGION}]%f ${ORG_PROMPT}"
 }
