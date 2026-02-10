@@ -462,6 +462,5 @@ aws_session() {
     clear_terminal
     create_and_display_table "$response" "$AWS_REGION"
 
-    export PROMPT="%F{green}${LOGNAME}@${AWS_ACCOUNT_ID}:${AWS_PROFILE}:${AWS_DEFAULT_REGION}%f %F{blue}%~%f
-> "
+    export PROMPT="%F{cyan}[${AWS_PROFILE}:${AWS_DEFAULT_REGION}]%f ${PROMPT}"
 }
