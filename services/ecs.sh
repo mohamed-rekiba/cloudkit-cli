@@ -189,6 +189,67 @@ ecs() {
         --command "$command"
       ;;
 
+    exec-running)
+      # Execute command in the first running task in a cluster
+      if [[ $# -lt 3 ]]; then
+        echo "Usage: ecs exec-running <cluster-name> <container-name> [--service <service-name>] [command]"
+        echo "Example: ecs exec-running my-cluster my-container /bin/bash"
+        echo "Example: ecs exec-running my-cluster my-container --service my-service /bin/bash"
+        echo "Example: ecs exec-running my-cluster my-container --service my-service ls -la"
+        return 1
+      fi
+
+      local cluster="$2"
+      local container="$3"
+      shift 3
+      local service_name=""
+      if [[ "$1" == "--service" && -n "$2" ]]; then
+        service_name="$2"
+        shift 2
+      fi
+      local command="${@:1}"
+
+      # If no command provided, default to bash
+      if [[ -z "$command" ]]; then
+        command="/bin/bash"
+      fi
+
+      local task_arn
+      if [[ -n "$service_name" ]]; then
+        task_arn=$(aws ecs list-tasks \
+          --cluster "$cluster" \
+          --service-name "$service_name" \
+          --desired-status RUNNING \
+          --query 'taskArns[0]' \
+          --output text)
+      else
+        task_arn=$(aws ecs list-tasks \
+          --cluster "$cluster" \
+          --desired-status RUNNING \
+          --query 'taskArns[0]' \
+          --output text)
+      fi
+
+      if [[ -z "$task_arn" || "$task_arn" == "None" ]]; then
+        if [[ -n "$service_name" ]]; then
+          echo "No running tasks found for service: $service_name"
+        else
+          echo "No running tasks found in cluster: $cluster"
+        fi
+        return 0
+      fi
+
+      local task_id
+      task_id=$(echo "$task_arn" | sed 's|.*task/||')
+
+      aws ecs execute-command \
+        --cluster "$cluster" \
+        --task "$task_id" \
+        --container "$container" \
+        --interactive \
+        --command "$command"
+      ;;
+
     logs)
       # Get logs from a task
       if [[ $# -lt 3 ]]; then
@@ -265,6 +326,9 @@ Commands:
                           Get detailed task information
   exec <cluster> <task-id> <container> [command]
                           Execute command in a container (default: /bin/bash)
+  exec-running <cluster> <container> [command]
+                          Execute command in first running task (default: /bin/bash)
+                          Add --service <service> to filter by service
   logs <cluster> <task-id> [--tail N]
                           Get task information and container logs
   stop <cluster> <task-id> [reason]
@@ -280,6 +344,9 @@ Examples:
   ecs task-info my-cluster abc123def456
   ecs exec my-cluster abc123def456 my-container /bin/bash
   ecs exec my-cluster abc123def456 my-container ls -la /var/log
+  ecs exec-running my-cluster my-container /bin/bash
+  ecs exec-running my-cluster my-container --service my-service /bin/bash
+  ecs exec-running my-cluster my-container ls -la /var/log
   ecs logs my-cluster abc123def456
   ecs stop my-cluster abc123def456
   ecs describe my-cluster my-service
