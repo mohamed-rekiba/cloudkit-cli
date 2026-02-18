@@ -223,9 +223,29 @@ Notes:
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-### 8) Uninstall / Disable
+### 8) Development / Testing
 
-- Remove or comment the `source /path/aws-cli-helpers/main.sh` line from:
+- **Lint (Shellcheck)**  
+  Install [Shellcheck](https://github.com/koalaman/shellcheck) (e.g. `brew install shellcheck` on macOS), then run:
+  ```bash
+  make shellcheck
+  ```
+  Or: `shellcheck -x main.sh session.sh services/ec2.sh services/ecs.sh`
+
+- **Smoke tests** (no AWS credentials required):
+  ```bash
+  make test
+  ```
+  Or: `bash test/run.sh` from the repo root. Tests verify that sourcing `main.sh` succeeds and that `ec2` / `ecs` with no arguments print usage and exit non-zero.
+
+- **CI**  
+  On push or pull request to `main`, GitHub Actions runs Shellcheck and the smoke tests. See `.github/workflows/ci.yml`.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+### 9) Uninstall / Disable
+
+- Remove or comment out the `source /path/aws-cli-helpers/main.sh` line from:
   - `~/.zshrc` (Zsh) or
   - `~/.bashrc` / `~/.bash_profile` (Bash)
 - Restart your terminal (or re-source the rc file)

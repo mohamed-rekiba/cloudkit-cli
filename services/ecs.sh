@@ -55,6 +55,7 @@ ecs() {
       printf "%-40s %-15s %-15s %-25s %-15s\n" "TASK ID" "LAST STATUS" "DESIRED STATUS" "CONTAINER" "UPTIME"
       printf "%s\n" "$(printf '=%.0s' {1..110})"
 
+      # shellcheck disable=SC2086
       aws ecs describe-tasks \
         --cluster "$2" \
         --tasks $task_arns \
@@ -113,6 +114,7 @@ ecs() {
       printf "%-40s %-15s %-15s %-25s %-15s\n" "TASK ID" "LAST STATUS" "DESIRED STATUS" "CONTAINER" "UPTIME"
       printf "%s\n" "$(printf '=%.0s' {1..110})"
 
+      # shellcheck disable=SC2086
       aws ecs describe-tasks \
         --cluster "$2" \
         --tasks $task_arns \
