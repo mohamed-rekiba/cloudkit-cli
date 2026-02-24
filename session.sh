@@ -21,15 +21,11 @@ get_credentials() {
 
     # Get caller identity from AWS STS
     local response
-    response=$(aws sts get-caller-identity --region "$current_region" 2>&1)
-
-    # Check if the command was successful
-    if [ $? -ne 0 ]; then
+    if ! response=$(aws sts get-caller-identity --region "$current_region" 2>&1); then
         echo "AWS Credentials not available"
         return 1
     fi
 
-    # Return the response
     echo "$response"
 }
 
@@ -206,9 +202,10 @@ find_chained_profiles() {
             fi
 
             # Extract the new profile name
-            if echo "$line" | grep -q '^\[profile '; then
-                current_profile=$(echo "$line" | sed 's/^\[profile \([^]]*\)\].*/\1/')
-            elif echo "$line" | grep -q '^\[default\]'; then
+            if [[ "$line" == "[profile "* ]]; then
+                current_profile="${line#\[profile }"
+                current_profile="${current_profile%%\]*}"
+            elif [[ "$line" == "[default]" ]]; then
                 current_profile="default"
             fi
             current_source=""
@@ -218,13 +215,15 @@ find_chained_profiles() {
         fi
 
         # Extract source_profile
-        if echo "$line" | grep -q '^source_profile'; then
-            current_source=$(echo "$line" | sed 's/^source_profile[[:space:]]*=[[:space:]]*\([^[:space:]]*\).*/\1/')
+        if [[ "$line" == source_profile* ]]; then
+            current_source="${line#*=}"
+            current_source="${current_source#"${current_source%%[![:space:]]*}"}"
         fi
 
         # Extract region
-        if echo "$line" | grep -q '^region'; then
-            current_region=$(echo "$line" | sed 's/^region[[:space:]]*=[[:space:]]*\([^[:space:]]*\).*/\1/')
+        if [[ "$line" == region* ]]; then
+            current_region="${line#*=}"
+            current_region="${current_region#"${current_region%%[![:space:]]*}"}"
         fi
 
         # Extract role_arn
@@ -341,8 +340,9 @@ aws_session() {
     fi
 
     # Build the account ID to profile mapping
-    local temp_map=$(mktemp)
-    trap "rm -f $temp_map" EXIT
+    local temp_map
+    temp_map=$(mktemp)
+    trap 'rm -f "$temp_map"' EXIT
 
     local current_profile=""
     local current_account=""
@@ -362,9 +362,10 @@ aws_session() {
             fi
 
             # Extract the new profile name
-            if echo "$line" | grep -q '^\[profile '; then
-                current_profile=$(echo "$line" | sed 's/^\[profile \([^]]*\)\].*/\1/')
-            elif echo "$line" | grep -q '^\[default\]'; then
+            if [[ "$line" == "[profile "* ]]; then
+                current_profile="${line#\[profile }"
+                current_profile="${current_profile%%\]*}"
+            elif [[ "$line" == "[default]" ]]; then
                 current_profile="default"
             fi
             current_account=""
@@ -373,13 +374,15 @@ aws_session() {
         fi
 
         # Extract sso_account_id
-        if echo "$line" | grep -q '^sso_account_id'; then
-            current_account=$(echo "$line" | sed 's/^sso_account_id[[:space:]]*=[[:space:]]*\([^[:space:]]*\).*/\1/')
+        if [[ "$line" == sso_account_id* ]]; then
+            current_account="${line#*=}"
+            current_account="${current_account#"${current_account%%[![:space:]]*}"}"
         fi
 
         # Extract region
-        if echo "$line" | grep -q '^region'; then
-            current_region=$(echo "$line" | sed 's/^region[[:space:]]*=[[:space:]]*\([^[:space:]]*\).*/\1/')
+        if [[ "$line" == region* ]]; then
+            current_region="${line#*=}"
+            current_region="${current_region#"${current_region%%[![:space:]]*}"}"
         fi
     done < "$HOME/.aws/config"
 
@@ -389,8 +392,7 @@ aws_session() {
     fi
 
     # Ask user to select a profile
-    select_profile "$temp_map"
-    if [ $? -ne 0 ]; then
+    if ! select_profile "$temp_map"; then
         return 1
     fi
 
@@ -398,9 +400,7 @@ aws_session() {
     local response
     local credentials_valid=false
 
-    response=$(aws sts get-caller-identity --profile "$AWS_PROFILE" 2>&1)
-
-    if [ $? -eq 0 ]; then
+    if response=$(aws sts get-caller-identity --profile "$AWS_PROFILE" 2>&1); then
         # Credentials exist, check if they're expired
         if check_credentials_expiration "$AWS_PROFILE"; then
             printf "%s%s%s\n" "${BOLD_GREEN}" "AWS credentials expired. Initiating SSO login..." "${NC}"
@@ -417,8 +417,7 @@ aws_session() {
         aws sso login --profile "$AWS_PROFILE"
 
         # Try again after login
-        response=$(aws sts get-caller-identity --profile "$AWS_PROFILE" 2>&1)
-        if [ $? -ne 0 ]; then
+        if ! response=$(aws sts get-caller-identity --profile "$AWS_PROFILE" 2>&1); then
             printf "%s%s%s\n" "${RED}" "Failed to authenticate" "${NC}"
             printf "%s%s%s\n" "${RED}" "$response" "${NC}"
             return 1
@@ -439,8 +438,7 @@ aws_session() {
 
         # If profile changed, re-fetch identity with the chained profile
         if [ "$AWS_PROFILE" != "$selected_base_profile" ]; then
-            response=$(aws sts get-caller-identity --profile "$AWS_PROFILE" 2>&1)
-            if [ $? -ne 0 ]; then
+            if ! response=$(aws sts get-caller-identity --profile "$AWS_PROFILE" 2>&1); then
                 printf "%sFailed to get identity for chained profile: %s%s\n" "${RED}" "$AWS_PROFILE" "${NC}"
                 printf "%sFalling back to base profile: %s%s\n" "${CYAN}" "$selected_base_profile" "${NC}"
                 export AWS_PROFILE="$selected_base_profile"
@@ -464,7 +462,9 @@ aws_session() {
 
     # Save original PROMPT if not already saved
     if [ -z "$ORG_PROMPT" ]; then
-        export ORG_PROMPT="$(echo "$PROMPT" | sed '/./,$!d')"
+        local trimmed_prompt
+        trimmed_prompt=$(echo "$PROMPT" | sed '/./,$!d')
+        export ORG_PROMPT="$trimmed_prompt"
     fi
     export PROMPT="%F{cyan}[${AWS_PROFILE}:${AWS_DEFAULT_REGION}]%f ${ORG_PROMPT}"
 }

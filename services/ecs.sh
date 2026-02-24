@@ -1,3 +1,4 @@
+# shellcheck shell=bash
 # ECS CLI function
 ecs() {
   case "$1" in
@@ -46,7 +47,8 @@ ecs() {
           --output json)
       fi
 
-      local count=$(echo "$task_arns" | jq 'length')
+      local count
+      count=$(echo "$task_arns" | jq 'length')
       if [[ $count -eq 0 ]]; then
         echo "No tasks found in cluster: $2"
         return 0
@@ -105,7 +107,8 @@ ecs() {
           --output json)
       fi
 
-      local count=$(echo "$task_arns" | jq 'length')
+      local count
+      count=$(echo "$task_arns" | jq 'length')
       if [[ $count -eq 0 ]]; then
         echo "No tasks found for service: $3"
         return 0
@@ -174,7 +177,7 @@ ecs() {
       local task="$3"
       local container="$4"
       shift 4
-      local command="${@:1}"
+      local command="$*"
 
       # If no command provided, default to bash
       if [[ -z "$command" ]]; then
@@ -207,7 +210,7 @@ ecs() {
         service_name="$2"
         shift 2
       fi
-      local command="${@:1}"
+      local command="$*"
 
       # If no command provided, default to bash
       if [[ -z "$command" ]]; then
@@ -240,7 +243,7 @@ ecs() {
       fi
 
       local task_id
-      task_id=$(echo "$task_arn" | sed 's|.*task/||')
+      task_id="${task_arn##*/}"
 
       aws ecs execute-command \
         --cluster "$cluster" \
@@ -262,19 +265,23 @@ ecs() {
       local tail_lines="50"
 
       if [[ "$4" == "--tail" ]] && [[ -n "$5" ]]; then
+        # shellcheck disable=SC2034  # reserved for future CloudWatch log tailing
         tail_lines="$5"
       fi
 
       # Get task details to find the log group and stream
-      local task_details=$(aws ecs describe-tasks \
+      local task_details
+      task_details=$(aws ecs describe-tasks \
         --cluster "$cluster" \
         --tasks "$task" \
         --query 'tasks[0]')
 
-      # Extract container name if not provided
-      local container_name=$(echo "$task_details" | jq -r '.containers[0].name')
-      local task_arn=$(echo "$task_details" | jq -r '.taskArn')
-      local task_id=$(echo "$task_arn" | sed 's|.*task/||')
+      local container_name
+      container_name=$(echo "$task_details" | jq -r '.containers[0].name')
+      local task_arn
+      task_arn=$(echo "$task_details" | jq -r '.taskArn')
+      local task_id
+      task_id="${task_arn##*/}"
 
       # Try to get logs from CloudWatch - this is basic and may need adjustment
       echo "Task: $task_id"
