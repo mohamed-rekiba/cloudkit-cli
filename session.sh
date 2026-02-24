@@ -121,6 +121,22 @@ select_profile() {
         return 1
     fi
 
+    # Auto-select if only one profile available
+    if [ "$count" -eq 1 ]; then
+        local account profile region
+        IFS=':' read -r account profile region < "$temp_map"
+
+        export AWS_PROFILE="$profile"
+        export AWS_DEFAULT_PROFILE="$profile"
+        export AWS_REGION="$region"
+        export AWS_DEFAULT_REGION="$region"
+        export AWS_ACCOUNT_ID="$account"
+
+        printf "\n%sAuto-selecting the only available profile: %s%s%s (Account: %s)%s\n" \
+            "${GREEN}" "${BOLD}" "$profile" "${NC}" "$account" "${NC}"
+        return 0
+    fi
+
     printf "\n%sAvailable AWS Profiles:%s\n\n" "${BOLD_GREEN}" "${NC}"
 
     # Build profile table, pipe through column -t, then colorize with sed
@@ -164,6 +180,145 @@ select_profile() {
 
     printf "%sSelected profile: %s%s (Account: %s%s)\n" \
         "${GREEN}" "${BOLD}" "$AWS_PROFILE" "${NC}" "$AWS_ACCOUNT_ID"
+}
+
+# Find profiles that chain from a given source profile (via source_profile)
+find_chained_profiles() {
+    local source="$1"
+    local output_file="$2"
+
+    local current_profile=""
+    local current_source=""
+    local current_region=""
+    local current_role_arn=""
+
+    while IFS= read -r line; do
+        # Remove leading/trailing whitespace
+        line=$(echo "$line" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+
+        # Skip empty lines and comments
+        [ -z "$line" ] && continue
+
+        # When we hit a new section header, save previous if it chains from source
+        if echo "$line" | grep -q '^\['; then
+            if [ -n "$current_source" ] && [ "$current_source" = "$source" ] && [ -n "$current_profile" ]; then
+                echo "$current_profile:$current_region:$current_role_arn" >> "$output_file"
+            fi
+
+            # Extract the new profile name
+            if echo "$line" | grep -q '^\[profile '; then
+                current_profile=$(echo "$line" | sed 's/^\[profile \([^]]*\)\].*/\1/')
+            elif echo "$line" | grep -q '^\[default\]'; then
+                current_profile="default"
+            fi
+            current_source=""
+            current_region=""
+            current_role_arn=""
+            continue
+        fi
+
+        # Extract source_profile
+        if echo "$line" | grep -q '^source_profile'; then
+            current_source=$(echo "$line" | sed 's/^source_profile[[:space:]]*=[[:space:]]*\([^[:space:]]*\).*/\1/')
+        fi
+
+        # Extract region
+        if echo "$line" | grep -q '^region'; then
+            current_region=$(echo "$line" | sed 's/^region[[:space:]]*=[[:space:]]*\([^[:space:]]*\).*/\1/')
+        fi
+
+        # Extract role_arn
+        if echo "$line" | grep -q '^role_arn'; then
+            current_role_arn=$(echo "$line" | sed 's/^role_arn[[:space:]]*=[[:space:]]*\(.*\)/\1/' | sed 's/[[:space:]]*$//')
+        fi
+    done < "$HOME/.aws/config"
+
+    # Don't forget the last profile
+    if [ -n "$current_source" ] && [ "$current_source" = "$source" ] && [ -n "$current_profile" ]; then
+        echo "$current_profile:$current_region:$current_role_arn" >> "$output_file"
+    fi
+}
+
+# Prompt user to select a chained profile or auto-select if only one exists
+select_chained_profile() {
+    local chained_file="$1"
+    local count=0
+
+    # Check if file exists and has content
+    if [ ! -s "$chained_file" ]; then
+        return 0
+    fi
+
+    count=$(wc -l < "$chained_file" | tr -d ' ')
+
+    if [ "$count" -eq 0 ]; then
+        return 0
+    fi
+
+    # Auto-select if only one chained profile
+    if [ "$count" -eq 1 ]; then
+        local profile region role_arn
+        IFS=':' read -r profile region role_arn < "$chained_file"
+
+        printf "\n%sFound chained profile: %s%s%s\n" "${CYAN}" "${BOLD}" "$profile" "${NC}"
+        printf "%sAuto-selecting chained profile...%s\n" "${GREEN}" "${NC}"
+
+        export AWS_PROFILE="$profile"
+        export AWS_DEFAULT_PROFILE="$profile"
+
+        if [ -n "$region" ]; then
+            export AWS_REGION="$region"
+            export AWS_DEFAULT_REGION="$region"
+        fi
+
+        return 0
+    fi
+
+    # Multiple chained profiles — prompt user to choose
+    printf "\n%sChained profiles found for %s%s%s:%s\n\n" \
+        "${BOLD_GREEN}" "${BOLD}" "$AWS_PROFILE" "${BOLD_GREEN}" "${NC}"
+
+    # Build chained profile table
+    {
+        printf "#|Profile|Region|Role ARN\n"
+        printf "─|───────────────────────────|──────────────|──────────────────────────────────────\n"
+
+        local line_num=1
+        while IFS=':' read -r profile region role_arn; do
+            printf "[%d]|%s|%s|%s\n" "$line_num" "$profile" "${region:-N/A}" "${role_arn:-N/A}"
+            line_num=$((line_num + 1))
+        done < "$chained_file"
+    } | column -t -s '|' | sed \
+        -e "1s/.*/${BOLD}&${NC}/" \
+        -e "s/\(\[[[0-9]*\]\)/${BLUE}\1${NC}/g"
+
+    printf "\n"
+
+    printf "\n%sSelect a chained profile [1-%d]: %s" "${BOLD}" "$count" "${NC}"
+    read -r choice
+
+    # Validate choice
+    if ! [[ "$choice" =~ ^[0-9]+$ ]] || [ "$choice" -lt 1 ] || [ "$choice" -gt "$count" ]; then
+        printf "%sInvalid selection. Keeping current profile: %s%s\n" "${RED}" "$AWS_PROFILE" "${NC}"
+        return 0
+    fi
+
+    # Get the selected line
+    local choice_line
+    choice_line=$(sed -n "${choice}p" "$chained_file")
+
+    local profile region role_arn
+    IFS=':' read -r profile region role_arn <<< "$choice_line"
+
+    export AWS_PROFILE="$profile"
+    export AWS_DEFAULT_PROFILE="$profile"
+
+    if [ -n "$region" ]; then
+        export AWS_REGION="$region"
+        export AWS_DEFAULT_REGION="$region"
+    fi
+
+    printf "%sSwitched to chained profile: %s%s%s\n" "${GREEN}" "${BOLD}" "$profile" "${NC}"
 }
 
 aws_session() {
@@ -272,14 +427,44 @@ aws_session() {
 
     printf "%sSuccessfully authenticated with profile: %s%s\n" "${GREEN}" "${BOLD}" "${AWS_PROFILE}${NC}"
 
-    if [ $? -eq 0 ]; then
-        clear_terminal
-        create_and_display_table "$response" "$AWS_REGION"
-    else
-        printf "%s%s%s\n" "${RED}" "$response" "${NC}"
-        exit 1
+    # Check for chained profiles (profiles with source_profile pointing to selected profile)
+    local chained_file
+    chained_file=$(mktemp)
+    local selected_base_profile="$AWS_PROFILE"
+
+    find_chained_profiles "$AWS_PROFILE" "$chained_file"
+
+    if [ -s "$chained_file" ]; then
+        select_chained_profile "$chained_file"
+
+        # If profile changed, re-fetch identity with the chained profile
+        if [ "$AWS_PROFILE" != "$selected_base_profile" ]; then
+            response=$(aws sts get-caller-identity --profile "$AWS_PROFILE" 2>&1)
+            if [ $? -ne 0 ]; then
+                printf "%sFailed to get identity for chained profile: %s%s\n" "${RED}" "$AWS_PROFILE" "${NC}"
+                printf "%sFalling back to base profile: %s%s\n" "${CYAN}" "$selected_base_profile" "${NC}"
+                export AWS_PROFILE="$selected_base_profile"
+                export AWS_DEFAULT_PROFILE="$selected_base_profile"
+                response=$(aws sts get-caller-identity --profile "$AWS_PROFILE" 2>&1)
+            fi
+
+            # Update AWS_ACCOUNT_ID from the new identity
+            local new_account_id
+            new_account_id=$(echo "$response" | jq -r '.Account // empty')
+            if [ -n "$new_account_id" ]; then
+                export AWS_ACCOUNT_ID="$new_account_id"
+            fi
+        fi
     fi
 
-    export PROMPT="%F{green}${LOGNAME}@${AWS_ACCOUNT_ID}:${AWS_PROFILE}:${AWS_DEFAULT_REGION}%f %F{blue}%~%f
-> "
+    rm -f "$chained_file"
+
+    clear_terminal
+    create_and_display_table "$response" "$AWS_REGION"
+
+    # Save original PROMPT if not already saved
+    if [ -z "$ORG_PROMPT" ]; then
+        export ORG_PROMPT="$(echo "$PROMPT" | sed '/./,$!d')"
+    fi
+    export PROMPT="%F{cyan}[${AWS_PROFILE}:${AWS_DEFAULT_REGION}]%f ${ORG_PROMPT}"
 }

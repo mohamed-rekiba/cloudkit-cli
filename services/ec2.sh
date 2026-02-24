@@ -1,4 +1,10 @@
-export SERVICES_DIR=$(dirname "$0")
+# Resolve services dir when sourced (BASH_SOURCE is set when sourced)
+if [[ -n "${BASH_SOURCE[0]:-}" ]]; then
+  SERVICES_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+else
+  SERVICES_DIR=$(cd "$(dirname "$0")" && pwd)
+fi
+export SERVICES_DIR
 
 # EC2 CLI function
 ec2() {
@@ -105,7 +111,7 @@ ec2() {
       local remote_file_name="$4"
       local port="$5"
 
-      $SERVICES_DIR/_ec2_upload.sh "$instance_id" "$file_to_send" "$remote_file_name" "$port"
+      "$SERVICES_DIR/_ec2_upload.sh" "$instance_id" "$file_to_send" "$remote_file_name" "$port"
       ;;
 
     *)

@@ -10,7 +10,7 @@
 - Install `expect` for file upload functionality (macOS: `brew install expect`)
 - Install `nc` (netcat) for file transfers (usually pre-installed on macOS/Linux)
 
-Example AWS profile (in `~/.aws/config`):
+Example AWS profiles (in `~/.aws/config`):
 
 ```ini
 [sso-session my-session]
@@ -24,6 +24,20 @@ sso_account_id = 123456789012
 sso_role_name = ReadOnly
 region = us-east-1
 output = json
+```
+
+Chained profiles (role assumption via `source_profile`) are also supported:
+
+```ini
+[profile dev-admin]
+source_profile = my-sso-profile
+role_arn = arn:aws:iam::098765432109:role/AdminRole
+region = eu-west-1
+
+[profile prod-readonly]
+role_arn = arn:aws:iam::111222333444:role/ReadOnly
+source_profile = my-sso-profile
+region = us-west-2
 ```
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -51,7 +65,12 @@ Notes:
 
 -  `aws_session`
   - Interactively select an AWS SSO profile (parses `~/.aws/config` for `sso_account_id` and `region`)
+  - If only one SSO profile exists, it is auto-selected (no prompt)
   - Performs SSO login if not already authenticated
+  - After authentication, detects **chained profiles** (profiles with `source_profile` pointing to the selected profile):
+    - **One chained profile**: auto-selects it and switches `AWS_PROFILE` / `AWS_DEFAULT_PROFILE`
+    - **Multiple chained profiles**: displays a selection table for the user to choose
+    - **No chained profiles**: continues with the base profile as before
   - Clears the terminal and displays account/profile/region in a styled table
   - Sets a helpful prompt showing `user@account:profile:region`
 
@@ -98,8 +117,9 @@ Notes:
 
 - Load the helpers (see Setup above)
 - Run `aws_session`
-  - Select your desired profile from the interactive list
+  - If only one SSO profile exists, it is auto-selected; otherwise select from the interactive list
   - If prompted, complete SSO login in your browser
+  - If chained profiles exist for the selected base profile, choose one (or it auto-selects if only one)
   - Verify the printed table shows the expected Account, Profile, Region
 - Use EC2 helpers as needed, for example:
   - `ec2 ls`
@@ -131,10 +151,12 @@ Notes:
 
 - Running `aws_session` shows a table with:
   - Correct AWS Account (formatted `XXXX-XXXX-XXXX`)
-  - Selected AWS Profile
+  - Selected AWS Profile (or chained profile if applicable)
   - Current Region
   - Identity ARN
   - User ID
+- If only one SSO profile exists, it is auto-selected without prompting
+- Chained profiles (via `source_profile`) are detected and offered after authentication
 - `ec2 ls` outputs instances data as JSON lines (via `jq -r`), without errors
 - `ec2 session <instance-id>` starts an interactive SSM shell session
 - `ec2 port-forward <remote-port> <local-port> <instance-id>` forwards from the EC2 instance itself
@@ -161,6 +183,14 @@ Notes:
   - Ensure your `~/.aws/config` profiles include both `sso_account_id` and `region`
   - Example provided in the Prerequisites section
 
+- Chained profile not detected
+  - Ensure the chained profile has `source_profile = <base-profile-name>` matching the selected SSO profile name exactly
+  - The chained profile must be defined in `~/.aws/config` with a `[profile name]` section header
+
+- Chained profile fails to assume role
+  - Verify the `role_arn` in the chained profile is correct and your SSO user has permission to assume it
+  - The session will fall back to the base SSO profile automatically
+
 - SSM session errors
   - Ensure the instance has SSM agent installed and proper IAM role
   - Ensure network/VPC endpoints allow SSM
@@ -186,16 +216,36 @@ Notes:
 ### 7) Repository Structure
 
 - `main.sh` — Entrypoint; exports `AWS_HELPERS_DIR`, loads sessions and EC2/ECS helpers
-- `session.sh` — Session orchestration: profile picker, SSO login, table display
+- `session.sh` — Session orchestration: profile picker (with auto-select), SSO login, chained profile detection, table display
 - `services/ec2.sh` — `ec2` command group: list instances, SSM session, port forwarding, file upload
 - `services/_ec2_upload.sh` — File upload script using Expect for SSM port forwarding transfers
 - `services/ecs.sh` — `ecs` command group: clusters, services, tasks, exec, logs, stop, describe
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-### 8) Uninstall / Disable
+### 8) Development / Testing
 
-- Remove or comment the `source /path/aws-cli-helpers/main.sh` line from:
+- **Lint (Shellcheck)**  
+  Install [Shellcheck](https://github.com/koalaman/shellcheck) (e.g. `brew install shellcheck` on macOS), then run:
+  ```bash
+  make shellcheck
+  ```
+  Or: `shellcheck -x main.sh session.sh services/ec2.sh services/ecs.sh`
+
+- **Smoke tests** (no AWS credentials required):
+  ```bash
+  make test
+  ```
+  Or: `bash test/run.sh` from the repo root. Tests verify that sourcing `main.sh` succeeds and that `ec2` / `ecs` with no arguments print usage and exit non-zero.
+
+- **CI**  
+  On push or pull request to `main`, GitHub Actions runs Shellcheck and the smoke tests. See `.github/workflows/ci.yml`.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+### 9) Uninstall / Disable
+
+- Remove or comment out the `source /path/aws-cli-helpers/main.sh` line from:
   - `~/.zshrc` (Zsh) or
   - `~/.bashrc` / `~/.bash_profile` (Bash)
 - Restart your terminal (or re-source the rc file)
