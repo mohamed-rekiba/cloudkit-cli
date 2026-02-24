@@ -9,6 +9,321 @@ BOLD=$'\033[1m'
 NC=$'\033[0m' # No Color
 CYAN=$'\033[0;36m'
 GRAY=$'\033[0;90m'
+YELLOW=$'\033[0;33m'
+
+# _parse_iso8601_epoch TIMESTAMP
+#
+# Converts an ISO 8601 UTC timestamp (e.g. "2026-02-24T15:00:00Z") to Unix
+# epoch seconds.  Tries three parsers in order of preference:
+#   1. python3  — available on macOS and most Linux distros
+#   2. BSD date  (macOS): date -j -f "%Y-%m-%dT%H:%M:%SZ"
+#   3. GNU date  (Linux): date -d
+#
+# Outputs epoch integer on stdout.
+# Returns 0 on success, 1 when input is empty, unparseable, or contains
+# characters outside the expected ISO 8601 character set.
+_parse_iso8601_epoch() {
+    local ts="$1"
+
+    # Reject empty input
+    if [ -z "$ts" ]; then
+        return 1
+    fi
+
+    # Allow only characters valid in an ISO 8601 timestamp to prevent injection.
+    # Valid set: digits, T, Z, +, -, :
+    if ! echo "$ts" | grep -qE '^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}([Z]|[+-][0-9]{2}:[0-9]{2})$'; then
+        return 1
+    fi
+
+    # Normalise +00:00 → Z for parsers that only handle the Z suffix
+    local normalized_ts="${ts/+00:00/Z}"
+
+    # Strip Z suffix for BSD date which uses a format string
+    local ts_no_z="${normalized_ts%Z}"
+
+    local epoch
+
+    # Try python3 first (most reliable across platforms)
+    if command -v python3 > /dev/null 2>&1; then
+        epoch=$(python3 -c "
+import sys, datetime, calendar
+ts = sys.argv[1]
+# Accept both Z-suffix and +00:00 offset
+for fmt in ('%Y-%m-%dT%H:%M:%SZ', '%Y-%m-%dT%H:%M:%S+00:00'):
+    try:
+        dt = datetime.datetime.strptime(ts, fmt)
+        print(calendar.timegm(dt.timetuple()))
+        sys.exit(0)
+    except ValueError:
+        pass
+sys.exit(1)
+" "$normalized_ts" 2>/dev/null) && echo "$epoch" && return 0
+    fi
+
+    # Try BSD date (macOS)
+    if epoch=$(date -j -f "%Y-%m-%dT%H:%M:%S" "$ts_no_z" "+%s" 2>/dev/null); then
+        echo "$epoch"
+        return 0
+    fi
+
+    # Try GNU date (Linux)
+    if epoch=$(date -d "$normalized_ts" +%s 2>/dev/null); then
+        echo "$epoch"
+        return 0
+    fi
+
+    return 1
+}
+
+# _warn_if_expiring_soon PROFILE
+#
+# Reads the credential expiry time for PROFILE via aws configure export-credentials.
+# Prints a colour-coded warning to stdout if expiry is within 15 minutes.
+# Prints nothing and returns 0 when credentials have no expiry or are healthy.
+_warn_if_expiring_soon() {
+    local profile="$1"
+
+    local expiration
+    expiration=$(aws configure export-credentials --profile "$profile" 2>/dev/null \
+        | jq -r '.Expiration // empty' 2>/dev/null)
+
+    if [ -z "$expiration" ]; then
+        return 0
+    fi
+
+    local expiry_epoch current_epoch
+    expiry_epoch=$(_parse_iso8601_epoch "$expiration") || return 0
+    current_epoch=$(date +%s)
+
+    local seconds_left=$(( expiry_epoch - current_epoch ))
+    local minutes_left=$(( seconds_left / 60 ))
+
+    if [ "$seconds_left" -le 300 ]; then
+        printf "%s⚠ CRITICAL: AWS credentials expire in %d minute(s)! Re-authenticate immediately.%s\n" \
+            "${RED}" "$minutes_left" "${NC}"
+    elif [ "$seconds_left" -le 900 ]; then
+        printf "%s⚠  warning: AWS credentials expire in %d minute(s).%s\n" \
+            "${YELLOW}" "$minutes_left" "${NC}"
+    fi
+
+    return 0
+}
+
+# _update_prompt
+#
+# Detects the running shell and updates the interactive prompt to display
+# the active AWS_PROFILE and AWS_DEFAULT_REGION.
+# Saves the original prompt to $ORG_PROMPT the first time.
+_update_prompt() {
+    local profile="${AWS_PROFILE:-}"
+    local region="${AWS_DEFAULT_REGION:-}"
+    local prefix="[${profile}:${region}] "
+
+    # Save original prompt once
+    if [ -z "${ORG_PROMPT:-}" ]; then
+        if [ -n "${ZSH_VERSION:-}" ]; then
+            export ORG_PROMPT="${PROMPT:-}"
+        else
+            export ORG_PROMPT="${PS1:-}"
+        fi
+    fi
+
+    if [ -n "${ZSH_VERSION:-}" ]; then
+        export PROMPT="${prefix}${ORG_PROMPT}"
+    else
+        export PS1="${prefix}${ORG_PROMPT}"
+    fi
+}
+
+# _detect_credential_type PROFILE_NAME
+#
+# Reads ~/.aws/config for the given profile stanza and outputs one of:
+#   "sso"     — profile has sso_account_id or sso_start_url
+#   "keys"    — profile has aws_access_key_id
+#   "process" — profile has credential_process
+#   "unknown" — none of the above found
+_detect_credential_type() {
+    local profile_name="$1"
+    local config_file="$HOME/.aws/config"
+
+    if [ ! -f "$config_file" ]; then
+        echo "unknown"
+        return 0
+    fi
+
+    local in_section=false
+    local line key
+
+    while IFS= read -r line; do
+        line=$(echo "$line" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+        [ -z "$line" ] && continue
+
+        # Detect section header
+        if echo "$line" | grep -q '^\['; then
+            # Check if this is our target profile
+            if [[ "$line" == "[profile ${profile_name}]" ]] || \
+               [[ "$line" == "[${profile_name}]" ]]; then
+                in_section=true
+            else
+                # If we were in the section, we've left it
+                if [ "$in_section" = true ]; then
+                    break
+                fi
+                in_section=false
+            fi
+            continue
+        fi
+
+        if [ "$in_section" = false ]; then
+            continue
+        fi
+
+        key="${line%%=*}"
+        key="${key%"${key##*[![:space:]]}"}"
+
+        case "$key" in
+            sso_account_id|sso_start_url)
+                echo "sso"
+                return 0
+                ;;
+            aws_access_key_id)
+                echo "keys"
+                return 0
+                ;;
+            credential_process)
+                echo "process"
+                return 0
+                ;;
+        esac
+    done < "$config_file"
+
+    echo "unknown"
+    return 0
+}
+
+# aws_logout
+#
+# Clears the active AWS session from the shell environment.
+# Unsets all AWS_* session variables, restores the original shell prompt,
+# and prints a confirmation message.
+# Does NOT delete any files from ~/.aws/
+aws_logout() {
+    unset AWS_PROFILE
+    unset AWS_DEFAULT_PROFILE
+    unset AWS_REGION
+    unset AWS_DEFAULT_REGION
+    unset AWS_ACCOUNT_ID
+
+    # Restore original prompt
+    if [ -n "${ORG_PROMPT:-}" ]; then
+        if [ -n "${ZSH_VERSION:-}" ]; then
+            export PROMPT="$ORG_PROMPT"
+        else
+            export PS1="$ORG_PROMPT"
+        fi
+    fi
+    unset ORG_PROMPT
+
+    printf "%sSuccessfully logged out. AWS session cleared.%s\n" "${GREEN}" "${NC}"
+    return 0
+}
+
+# aws_switch
+#
+# Switches to a different AWS profile within the current shell session.
+# Presents the full profile list, validates credentials, and updates the prompt.
+aws_switch() {
+    if ! command -v jq > /dev/null 2>&1; then
+        printf "%sError: jq is required. Please install jq.%s\n" "${RED}" "${NC}"
+        return 1
+    fi
+
+    if ! command -v aws > /dev/null 2>&1; then
+        printf "%sError: AWS CLI is required. Please install it.%s\n" "${RED}" "${NC}"
+        return 1
+    fi
+
+    if [ ! -f "$HOME/.aws/config" ]; then
+        printf "%sError: ~/.aws/config not found%s\n" "${RED}" "${NC}"
+        return 1
+    fi
+
+    # Build profile map (all credential types)
+    local temp_map
+    temp_map=$(mktemp)
+
+    local current_profile="" current_account="" current_region=""
+
+    while IFS= read -r line; do
+        line=$(echo "$line" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+        [ -z "$line" ] && continue
+
+        if echo "$line" | grep -q '^\['; then
+            if [ -n "$current_profile" ]; then
+                echo "${current_account:-N/A}:${current_profile}:${current_region:-N/A}" >> "$temp_map"
+            fi
+            if [[ "$line" == "[profile "* ]]; then
+                current_profile="${line#\[profile }"
+                current_profile="${current_profile%%\]*}"
+            elif [[ "$line" == "[default]" ]]; then
+                current_profile="default"
+            else
+                current_profile=""
+            fi
+            current_account=""
+            current_region=""
+            continue
+        fi
+
+        if [[ "$line" == sso_account_id* ]] && [ -z "$current_account" ]; then
+            current_account="${line#*=}"
+            current_account="${current_account#"${current_account%%[![:space:]]*}"}"
+        elif [[ "$line" == aws_access_key_id* ]] && [ -z "$current_account" ]; then
+            current_account="(keys)"
+        elif [[ "$line" == credential_process* ]] && [ -z "$current_account" ]; then
+            current_account="(process)"
+        fi
+
+        if [[ "$line" == region* ]]; then
+            current_region="${line#*=}"
+            current_region="${current_region#"${current_region%%[![:space:]]*}"}"
+        fi
+    done < "$HOME/.aws/config"
+
+    if [ -n "$current_profile" ]; then
+        echo "${current_account:-N/A}:${current_profile}:${current_region:-N/A}" >> "$temp_map"
+    fi
+
+    if ! select_profile "$temp_map"; then
+        rm -f "$temp_map"
+        return 1
+    fi
+    rm -f "$temp_map"
+
+    # Validate credentials for the selected profile
+    local response
+    if ! response=$(aws sts get-caller-identity --profile "$AWS_PROFILE" 2>&1); then
+        local cred_type
+        cred_type=$(_detect_credential_type "$AWS_PROFILE")
+        if [ "$cred_type" = "sso" ]; then
+            printf "%sInitiating SSO login for %s...%s\n" "${BOLD_GREEN}" "$AWS_PROFILE" "${NC}"
+            aws sso login --profile "$AWS_PROFILE"
+            if ! response=$(aws sts get-caller-identity --profile "$AWS_PROFILE" 2>&1); then
+                printf "%sFailed to authenticate with profile: %s%s\n" "${RED}" "$AWS_PROFILE" "${NC}"
+                return 1
+            fi
+        else
+            printf "%sFailed to authenticate with profile: %s%s\n" "${RED}" "$AWS_PROFILE" "${NC}"
+            return 1
+        fi
+    fi
+
+    _update_prompt
+    _warn_if_expiring_soon "$AWS_PROFILE"
+    create_and_display_table "$response" "$AWS_REGION"
+    return 0
+}
 
 # Clear the terminal screen
 clear_terminal() {
@@ -29,27 +344,23 @@ get_credentials() {
     echo "$response"
 }
 
-# Check if AWS credentials are expired
+# Check if AWS credentials are expired.
+# Returns 0 if expired, 1 if valid or no expiry information is available.
 check_credentials_expiration() {
     local profile="$1"
     local expiration
 
-    # Get the expiration time from AWS credentials
-    expiration=$(aws configure export-credentials --profile "$profile" 2>/dev/null | jq -r '.Expiration // empty')
+    expiration=$(aws configure export-credentials --profile "$profile" 2>/dev/null \
+        | jq -r '.Expiration // empty')
 
-    # Return 1 if no expiration info (not applicable for some credential types)
     if [ -z "$expiration" ]; then
         return 1
     fi
 
-    # Convert expiration ISO 8601 timestamp to epoch
-    local expiration_epoch
-    local current_epoch
-
-    expiration_epoch=$(date -d "$expiration" +%s 2>/dev/null)
+    local expiration_epoch current_epoch
+    expiration_epoch=$(_parse_iso8601_epoch "$expiration") || return 1
     current_epoch=$(date +%s)
 
-    # Return 0 if expired, 1 if valid
     if [ "$expiration_epoch" -lt "$current_epoch" ]; then
         return 0
     fi
@@ -459,12 +770,6 @@ aws_session() {
 
     clear_terminal
     create_and_display_table "$response" "$AWS_REGION"
-
-    # Save original PROMPT if not already saved
-    if [ -z "$ORG_PROMPT" ]; then
-        local trimmed_prompt
-        trimmed_prompt=$(echo "$PROMPT" | sed '/./,$!d')
-        export ORG_PROMPT="$trimmed_prompt"
-    fi
-    export PROMPT="%F{cyan}[${AWS_PROFILE}:${AWS_DEFAULT_REGION}]%f ${ORG_PROMPT}"
+    _update_prompt
+    _warn_if_expiring_soon "$AWS_PROFILE"
 }

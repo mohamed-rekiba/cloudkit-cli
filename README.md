@@ -5,8 +5,9 @@
 ### 1) Prerequisites
 
 - Install AWS CLI v2 (`aws --version`)
-- Configure AWS SSO profiles in `~/.aws/config` (must include `sso_account_id` and `region`)
+- Configure AWS profiles in `~/.aws/config` (SSO, static keys, or credential_process — all supported)
 - Install `jq` for JSON parsing
+- Install `python3` (3.6+) for cross-platform credential expiry parsing (macOS: `brew install python3`)
 - Install `expect` for file upload functionality (macOS: `brew install expect`)
 - Install `nc` (netcat) for file transfers (usually pre-installed on macOS/Linux)
 
@@ -63,16 +64,27 @@ Notes:
 
 ### 3) Commands Provided
 
--  `aws_session`
-  - Interactively select an AWS SSO profile (parses `~/.aws/config` for `sso_account_id` and `region`)
-  - If only one SSO profile exists, it is auto-selected (no prompt)
-  - Performs SSO login if not already authenticated
-  - After authentication, detects **chained profiles** (profiles with `source_profile` pointing to the selected profile):
-    - **One chained profile**: auto-selects it and switches `AWS_PROFILE` / `AWS_DEFAULT_PROFILE`
-    - **Multiple chained profiles**: displays a selection table for the user to choose
-    - **No chained profiles**: continues with the base profile as before
+- `aws_session`
+  - Lists all configured AWS profiles from `~/.aws/config` — SSO, static keys, and credential_process
+  - If only one profile exists, it is auto-selected (no prompt)
+  - Performs SSO login if not already authenticated (SSO profiles only)
+  - After authentication, detects **chained profiles** (profiles with `source_profile`):
+    - **One chained profile**: auto-selects it
+    - **Multiple chained profiles**: displays a selection table
+    - **No chained profiles**: continues with the base profile
   - Clears the terminal and displays account/profile/region in a styled table
-  - Sets a helpful prompt showing `user@account:profile:region`
+  - Updates the shell prompt with `[profile:region]` (bash and zsh)
+  - Warns if credentials will expire in ≤ 15 minutes (yellow) or ≤ 5 minutes (red)
+
+- `aws_logout`
+  - Unsets all AWS session environment variables (`AWS_PROFILE`, `AWS_REGION`, etc.)
+  - Restores the original shell prompt
+  - Does not delete any files from `~/.aws/`
+
+- `aws_switch`
+  - Switches to a different profile without re-running the full `aws_session` flow
+  - Triggers SSO login automatically if the selected profile needs it
+  - Updates the prompt and checks for upcoming expiry
 
 - `sso_login <profile>` (alias)
   - Shortcut for `aws sso login --profile <profile>`
@@ -117,10 +129,12 @@ Notes:
 
 - Load the helpers (see Setup above)
 - Run `aws_session`
-  - If only one SSO profile exists, it is auto-selected; otherwise select from the interactive list
+  - Select from the interactive profile list (or it auto-selects if only one profile exists)
   - If prompted, complete SSO login in your browser
-  - If chained profiles exist for the selected base profile, choose one (or it auto-selects if only one)
+  - Choose a chained profile if applicable (or it auto-selects if only one)
   - Verify the printed table shows the expected Account, Profile, Region
+- To switch accounts mid-session, run `aws_switch`
+- To clear the session, run `aws_logout`
 - Use EC2 helpers as needed, for example:
   - `ec2 ls`
   - `ec2 ls-running`
@@ -180,7 +194,7 @@ Notes:
   - Install `awscli` (macOS: `brew install awscli`)
 
 - No profiles listed in `aws_session`
-  - Ensure your `~/.aws/config` profiles include both `sso_account_id` and `region`
+  - Ensure your `~/.aws/config` profiles include `sso_account_id`, `aws_access_key_id`, or `credential_process`
   - Example provided in the Prerequisites section
 
 - Chained profile not detected
@@ -223,7 +237,16 @@ Notes:
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-### 8) Development / Testing
+### 8) Documentation
+
+Full documentation is available in [docs/](docs/):
+
+- [docs/guides/aws-auth.md](docs/guides/aws-auth.md) — Authentication guide: commands, expiry warnings, profile types, troubleshooting
+- [docs/adr/ADR-001-aws-auth-enhancement.md](docs/adr/ADR-001-aws-auth-enhancement.md) — Architecture decisions for the auth enhancement
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+### 9) Development / Testing
 
 - **Lint (Shellcheck)**  
   Install [Shellcheck](https://github.com/koalaman/shellcheck) (e.g. `brew install shellcheck` on macOS), then run:
@@ -243,7 +266,7 @@ Notes:
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-### 9) Uninstall / Disable
+### 10) Uninstall / Disable
 
 - Remove or comment out the `source /path/aws-cli-helpers/main.sh` line from:
   - `~/.zshrc` (Zsh) or
