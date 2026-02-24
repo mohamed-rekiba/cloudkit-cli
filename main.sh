@@ -1,3 +1,4 @@
+# shellcheck shell=bash
 # Resolve helpers dir when run or sourced (BASH_SOURCE is set when sourced)
 if [[ -n "${BASH_SOURCE[0]:-}" ]]; then
   AWS_HELPERS_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
