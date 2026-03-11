@@ -103,6 +103,25 @@ create_and_display_table() {
     printf "\n%s━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━%s\n\n" "${BOLD_GREEN}" "${NC}"
 }
 
+create_and_display_gcloud_table() {
+    local account="$1"
+    local project="$2"
+
+    printf "\n%s━━━ GCloud Session Information ━━━%s\n\n" "${BOLD_GREEN}" "${NC}"
+
+    {
+        printf "Info|Value\n"
+        printf "────────────|────────────────────────────────────────────────────────\n"
+        printf "Account|%s\n" "$account"
+        printf "Project|%s\n" "$project"
+    } | column -t -s '|' | sed \
+        -e "1s/.*/${BOLD}&${NC}/" \
+        -e "s/\(Account[[:space:]]*\)\(.*\)/\1${RED}\2${NC}/" \
+        -e "s/\(Project[[:space:]]*\)\(.*\)/\1${BLUE}\2${NC}/"
+
+    printf "\n%s━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━%s\n\n" "${BOLD_GREEN}" "${NC}"
+}
+
 select_profile() {
     local temp_map="$1"
     local count=0
@@ -319,6 +338,58 @@ select_chained_profile() {
     fi
 
     printf "%sSwitched to chained profile: %s%s%s\n" "${GREEN}" "${BOLD}" "$profile" "${NC}"
+select_gcloud_profile() {
+    local temp_map="$1"
+    local count=0
+    local choice_line=""
+
+    # Count configurations
+    count=$(wc -l < "$temp_map")
+
+    if [ "$count" -eq 0 ]; then
+        printf "%sError: No gcloud configurations found.%s\n" "${RED}" "${NC}"
+        printf "%sTip: Create one with: gcloud config configurations create <name>%s\n" "${GRAY}" "${NC}"
+        return 1
+    fi
+
+    printf "\n%sAvailable GCloud Configurations:%s\n\n" "${BOLD_GREEN}" "${NC}"
+
+    {
+        printf "#|Config|Active|Account|Project\n"
+        printf "─|───────────────────────────|────────|────────────────────────────|────────────────────────────\n"
+
+        local line_num=1
+        while IFS=':' read -r name active account project; do
+            printf "[%d]|%s|%s|%s|%s\n" "$line_num" "$name" "$active" "$account" "$project"
+            line_num=$((line_num + 1))
+        done < "$temp_map"
+    } | column -t -s '|' | sed \
+        -e "1s/.*/${BOLD}&${NC}/" \
+        -e "s/\(\[[[0-9]*\]\)/${BLUE}\1${NC}/g" \
+        -e "s/\(Active[[:space:]]*\)\(True\)/\1${GREEN}\2${NC}/" \
+        -e "s/\(Active[[:space:]]*\)\(False\)/\1${GRAY}\2${NC}/"
+
+    printf "\n"
+
+    printf "\n%sSelect a configuration [1-%d]: %s" "${BOLD}" "$count" "${NC}"
+    read -r choice
+
+    if ! [[ "$choice" =~ ^[0-9]+$ ]] || [ "$choice" -lt 1 ] || [ "$choice" -gt "$count" ]; then
+        printf "%sInvalid selection.%s\n" "${RED}" "${NC}"
+        return 1
+    fi
+
+    choice_line=$(sed -n "${choice}p" "$temp_map")
+
+    local name active account project
+    IFS=':' read -r name active account project <<< "$choice_line"
+
+    if ! gcloud config configurations activate "$name" > /dev/null 2>&1; then
+        printf "%sFailed to activate configuration: %s%s\n" "${RED}" "$name" "${NC}"
+        return 1
+    fi
+
+    printf "%sSelected configuration: %s%s\n" "${GREEN}" "${BOLD}" "$name" "${NC}"
 }
 
 aws_session() {
@@ -467,4 +538,87 @@ aws_session() {
         export ORG_PROMPT="$(echo "$PROMPT" | sed '/./,$!d')"
     fi
     export PROMPT="%F{cyan}[${AWS_PROFILE}:${AWS_DEFAULT_REGION}]%f ${ORG_PROMPT}"
+
+}
+
+gcloud_session() {
+    local force_reauth=false
+    if [[ "$1" == "--reauth" ]]; then
+        force_reauth=true
+    fi
+
+    # Check if jq is installed
+    if ! command -v jq > /dev/null 2>&1; then
+        printf "%sError: jq is required to parse gcloud response. Please install jq.%s\n" "${RED}" "${NC}"
+        exit 1
+    fi
+
+    # Check if gcloud cli is installed
+    if ! command -v gcloud > /dev/null 2>&1; then
+        printf "%sError: gcloud CLI is required. Please install it.%s\n" "${RED}" "${NC}"
+        exit 1
+    fi
+
+    # Build configuration list for selection
+    local temp_map=$(mktemp)
+    trap "rm -f $temp_map" EXIT
+
+    gcloud config configurations list --format=json 2>/dev/null | jq -r '.[] |
+      (.name) as $name |
+      (if .is_active then "True" else "False" end) as $active |
+      (.properties.core.account // "") as $account |
+      (.properties.core.project // "") as $project |
+      "\($name):\($active):\($account):\($project)"' > "$temp_map"
+
+    select_gcloud_profile "$temp_map"
+    if [ $? -ne 0 ]; then
+        return 1
+    fi
+
+    local active_account
+    local active_project
+    local credentials_valid=false
+
+    active_account=$(gcloud config get-value account 2>/dev/null)
+    active_project=$(gcloud config get-value project 2>/dev/null)
+
+    if [ -n "$active_account" ] && [ "$active_account" != "(unset)" ] && [ "$force_reauth" = false ]; then
+        local active_count
+        active_count=$(gcloud auth list --format=json 2>/dev/null | jq '[.[] | select(.status=="ACTIVE")] | length' 2>/dev/null)
+        if [ "$active_count" -gt 0 ]; then
+            local access_token
+            access_token=$(gcloud auth print-access-token 2>/dev/null)
+            if [ -n "$access_token" ]; then
+                credentials_valid=true
+                printf "%sGCloud credentials are valid%s\n" "${GREEN}" "${NC}"
+            fi
+        fi
+    fi
+
+    if [ "$credentials_valid" = false ]; then
+        if [ "$force_reauth" = true ]; then
+            printf "%s%s%s\n" "${BOLD_GREEN}" "GCloud reauthentication requested. Initiating login..." "${NC}"
+        else
+            printf "%s%s%s\n" "${BOLD_GREEN}" "GCloud credentials expired or not available. Initiating login..." "${NC}"
+        fi
+        gcloud auth login
+        active_account=$(gcloud config get-value account 2>/dev/null)
+        active_project=$(gcloud config get-value project 2>/dev/null)
+    fi
+
+    if [ -z "$active_account" ] || [ "$active_account" = "(unset)" ]; then
+        printf "%sFailed to authenticate with gcloud%s\n" "${RED}" "${NC}"
+        return 1
+    fi
+
+    if [ -z "$active_project" ] || [ "$active_project" = "(unset)" ]; then
+        active_project="(unset)"
+    fi
+
+    printf "%sSuccessfully authenticated with account: %s%s\n" "${GREEN}" "${BOLD}" "${active_account}${NC}"
+    clear_terminal
+    create_and_display_gcloud_table "$active_account" "$active_project"
+
+    export PROMPT="%F{green}${LOGNAME}@gcloud:${active_account}:${active_project}%f %F{blue}%~%f
+> "
 }
