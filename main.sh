@@ -14,3 +14,5 @@ source "$AWS_HELPERS_DIR/session.sh"
 source "$AWS_HELPERS_DIR/services/ec2.sh"
 # shellcheck source=services/ecs.sh disable=SC1090
 source "$AWS_HELPERS_DIR/services/ecs.sh"
+# shellcheck source=services/gce.sh disable=SC1090
+source "$AWS_HELPERS_DIR/services/gce.sh"
