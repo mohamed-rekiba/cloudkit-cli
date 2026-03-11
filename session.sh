@@ -648,6 +648,58 @@ select_chained_profile() {
     fi
 
     printf "%sSwitched to chained profile: %s%s%s\n" "${GREEN}" "${BOLD}" "$profile" "${NC}"
+select_gcloud_profile() {
+    local temp_map="$1"
+    local count=0
+    local choice_line=""
+
+    # Count configurations
+    count=$(wc -l < "$temp_map")
+
+    if [ "$count" -eq 0 ]; then
+        printf "%sError: No gcloud configurations found.%s\n" "${RED}" "${NC}"
+        printf "%sTip: Create one with: gcloud config configurations create <name>%s\n" "${GRAY}" "${NC}"
+        return 1
+    fi
+
+    printf "\n%sAvailable GCloud Configurations:%s\n\n" "${BOLD_GREEN}" "${NC}"
+
+    {
+        printf "#|Config|Active|Account|Project\n"
+        printf "─|───────────────────────────|────────|────────────────────────────|────────────────────────────\n"
+
+        local line_num=1
+        while IFS=':' read -r name active account project; do
+            printf "[%d]|%s|%s|%s|%s\n" "$line_num" "$name" "$active" "$account" "$project"
+            line_num=$((line_num + 1))
+        done < "$temp_map"
+    } | column -t -s '|' | sed \
+        -e "1s/.*/${BOLD}&${NC}/" \
+        -e "s/\(\[[[0-9]*\]\)/${BLUE}\1${NC}/g" \
+        -e "s/\(Active[[:space:]]*\)\(True\)/\1${GREEN}\2${NC}/" \
+        -e "s/\(Active[[:space:]]*\)\(False\)/\1${GRAY}\2${NC}/"
+
+    printf "\n"
+
+    printf "\n%sSelect a configuration [1-%d]: %s" "${BOLD}" "$count" "${NC}"
+    read -r choice
+
+    if ! [[ "$choice" =~ ^[0-9]+$ ]] || [ "$choice" -lt 1 ] || [ "$choice" -gt "$count" ]; then
+        printf "%sInvalid selection.%s\n" "${RED}" "${NC}"
+        return 1
+    fi
+
+    choice_line=$(sed -n "${choice}p" "$temp_map")
+
+    local name active account project
+    IFS=':' read -r name active account project <<< "$choice_line"
+
+    if ! gcloud config configurations activate "$name" > /dev/null 2>&1; then
+        printf "%sFailed to activate configuration: %s%s\n" "${RED}" "$name" "${NC}"
+        return 1
+    fi
+
+    printf "%sSelected configuration: %s%s\n" "${GREEN}" "${BOLD}" "$name" "${NC}"
 }
 
 select_gcloud_profile() {
