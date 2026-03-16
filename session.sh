@@ -648,6 +648,8 @@ select_chained_profile() {
     fi
 
     printf "%sSwitched to chained profile: %s%s%s\n" "${GREEN}" "${BOLD}" "$profile" "${NC}"
+}
+
 select_gcloud_profile() {
     local temp_map="$1"
     local count=0
