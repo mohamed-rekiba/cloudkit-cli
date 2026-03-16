@@ -1,3 +1,4 @@
+# shellcheck shell=bash
 # Resolve services dir when sourced (BASH_SOURCE is set when sourced)
 if [[ -n "${BASH_SOURCE[0]:-}" ]]; then
   SERVICES_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
@@ -10,12 +11,14 @@ export SERVICES_DIR
 ec2() {
   case "$1" in
     ls)
+      # shellcheck disable=SC2016  # backticks are JMESPath literal syntax
       aws ec2 describe-instances \
         --query 'Reservations[].Instances[].{id: InstanceId, name: Tags[?Key==`Name`]|[0].Value, state: State.Name}' \
         | jq -r
       ;;
 
     ls-running)
+      # shellcheck disable=SC2016
       aws ec2 describe-instances \
         --filters Name=instance-state-name,Values=running \
         --query 'Reservations[].Instances[].{id: InstanceId, name: Tags[?Key==`Name`]|[0].Value, state: State.Name}' \
@@ -23,6 +26,7 @@ ec2() {
       ;;
 
     ls-stopped)
+      # shellcheck disable=SC2016
       aws ec2 describe-instances \
         --filters Name=instance-state-name,Values=stopped \
         --query 'Reservations[].Instances[].{id: InstanceId, name: Tags[?Key==`Name`]|[0].Value, state: State.Name}' \
