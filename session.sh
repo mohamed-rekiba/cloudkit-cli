@@ -845,13 +845,6 @@ aws_session() {
     create_and_display_table "$response" "$AWS_REGION"
     _update_prompt
     _warn_if_expiring_soon "$AWS_PROFILE"
-
-    # Save original PROMPT if not already saved
-    if [ -z "$ORG_PROMPT" ]; then
-        export ORG_PROMPT="$(echo "$PROMPT" | sed '/./,$!d')"
-    fi
-    export PROMPT="%F{cyan}[${AWS_PROFILE}:${AWS_DEFAULT_REGION}]%f ${ORG_PROMPT}"
-
 }
 
 gcloud_session() {
