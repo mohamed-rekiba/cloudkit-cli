@@ -3,6 +3,14 @@ export SERVICES_DIR=$(dirname "$0")
 # GCE (GCloud Compute Engine) CLI function
 gce() {
   case "$1" in
+    ls)
+      if [[ "$2" == "--filter" && -n "$3" ]]; then
+        gcloud compute instances list --filter="name~$3"
+      else
+        gcloud compute instances list
+      fi
+      ;;
+
     ssh)
       if [[ $# -lt 2 ]]; then
         echo "Usage: gce ssh <instance-name> [--zone <zone>] [command]"
@@ -69,12 +77,16 @@ gce() {
 Usage: gce <command> [options]
 
 Commands:
+  ls [--filter <pattern>]
+                          List GCE instances (optional name filter)
   ssh <instance-name> [--zone <zone>] [command]
                           SSH to a GCE VM (optional command)
   scp <source> <destination> [--zone <zone>]
                           Copy files to/from a GCE VM
 
 Examples:
+  gce ls
+  gce ls --filter laravel-staging
   gce ssh my-vm --zone us-central1-a
   gce ssh my-vm --zone us-central1-a "ls -la"
   gce scp ./file.txt my-vm:/tmp/file.txt --zone us-central1-a
