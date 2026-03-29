@@ -1,4 +1,4 @@
-# CI: Lint (Shellcheck) and smoke tests. No AWS credentials required.
+# CI: Lint (Shellcheck) and smoke tests. No AWS/GCloud credentials required.
 name: CI
 
 on:

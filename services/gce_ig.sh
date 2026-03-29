@@ -1,4 +1,6 @@
-export SERVICES_DIR=$(dirname "$0")
+# shellcheck shell=bash
+SERVICES_DIR=$(dirname "$0")
+export SERVICES_DIR
 
 # GCE Managed Instance Groups (MIG) helper
 gce-ig() {

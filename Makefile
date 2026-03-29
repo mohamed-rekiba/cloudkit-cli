@@ -1,8 +1,8 @@
-# AWS CLI Helpers — development targets
+# CloudKit CLI — development targets
 # Requires: shellcheck (brew install shellcheck), bash
 
 SHELL := /bin/bash
-SCRIPTS := main.sh session.sh services/ec2.sh services/ecs.sh
+SCRIPTS := main.sh session.sh services/ec2.sh services/ecs.sh services/gce.sh services/gce_ig.sh
 
 .PHONY: shellcheck test ci help
 
