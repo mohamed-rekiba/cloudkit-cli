@@ -21,9 +21,9 @@ Shell helpers for AWS and GCloud. Source one file, get interactive session manag
 **GCloud**
 
 - Install Google Cloud SDK / `gcloud` CLI (`gcloud --version`)
-- Create at least one gcloud configuration (`gcloud config configurations create <name>`)
+- Create at least one gcloud configuration (see examples below)
 
-Example AWS profiles (in `~/.aws/config`):
+**AWS configuration** (`~/.aws/config`):
 
 ```ini
 [sso-session my-session]
@@ -52,6 +52,40 @@ role_arn = arn:aws:iam::111222333444:role/ReadOnly
 source_profile = my-sso-profile
 region = us-west-2
 ```
+
+**GCloud configuration** (`~/.config/gcloud/configurations/`):
+
+Each gcloud configuration is stored as a separate file. Create and manage them with the `gcloud` CLI:
+
+```bash
+# Create a configuration for a project
+gcloud config configurations create my-project
+gcloud config set core/account user@example.com
+gcloud config set core/project my-gcp-project
+gcloud config set compute/region us-central1
+gcloud config set compute/zone us-central1-a
+
+# Create another configuration for a different project
+gcloud config configurations create staging
+gcloud config set core/account user@example.com
+gcloud config set core/project my-staging-project
+gcloud config set compute/region europe-west1
+gcloud config set compute/zone europe-west1-b
+```
+
+The resulting config files look like this (`~/.config/gcloud/configurations/config_my-project`):
+
+```ini
+[core]
+account = user@example.com
+project = my-gcp-project
+
+[compute]
+region = us-central1
+zone = us-central1-a
+```
+
+`gcloud_session` discovers these configurations via `gcloud config configurations list` and presents them for selection.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
