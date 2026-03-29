@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Smoke tests for AWS CLI helpers. No AWS credentials required.
+# Smoke tests for CloudKit CLI. No AWS/GCloud credentials required.
 # Run from repo root: bash test/run.sh
 
 # Resolve repo root first (before set -e) so we can cd reliably

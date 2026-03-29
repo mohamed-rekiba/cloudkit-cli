@@ -1,4 +1,6 @@
-export SERVICES_DIR=$(dirname "$0")
+# shellcheck shell=bash
+SERVICES_DIR=$(dirname "$0")
+export SERVICES_DIR
 
 # GCE (GCloud Compute Engine) CLI function
 gce() {
@@ -28,7 +30,7 @@ gce() {
         shift 2
       fi
 
-      local command="${@:1}"
+      local command="${*:1}"
       local args=()
       if [[ -n "$zone" ]]; then
         args+=(--zone "$zone")
