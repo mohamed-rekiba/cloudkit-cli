@@ -116,9 +116,16 @@ _warn_if_expiring_soon() {
 # the active AWS_PROFILE and AWS_DEFAULT_REGION.
 # Saves the original prompt to $ORG_PROMPT the first time.
 _update_prompt() {
-    local profile="${AWS_PROFILE:-}"
-    local region="${AWS_DEFAULT_REGION:-}"
-    local prefix="[${profile}:${region}] "
+    local custom_prefix="${1:-}"
+    local prefix
+
+    if [ -n "$custom_prefix" ]; then
+        prefix="$custom_prefix"
+    else
+        local profile="${AWS_PROFILE:-}"
+        local region="${AWS_DEFAULT_REGION:-}"
+        prefix="[${profile}:${region}] "
+    fi
 
     # Save original prompt once
     if [ -z "${ORG_PROMPT:-}" ]; then
@@ -414,17 +421,26 @@ create_and_display_gcloud_table() {
     local account="$1"
     local project="$2"
 
+    local config_name="${GCLOUD_ACTIVE_CONFIG:-$(gcloud config configurations list --filter='is_active=true' --format='value(name)' 2>/dev/null)}"
+    local region
+    region=$(gcloud config get-value compute/region 2>/dev/null)
+    [ "$region" = "(unset)" ] && region="N/A"
+
     printf "\n%s━━━ GCloud Session Information ━━━%s\n\n" "${BOLD_GREEN}" "${NC}"
 
     {
         printf "Info|Value\n"
         printf "────────────|────────────────────────────────────────────────────────\n"
         printf "Account|%s\n" "$account"
+        printf "Configuration|%s\n" "$config_name"
         printf "Project|%s\n" "$project"
+        printf "Region|%s\n" "$region"
     } | column -t -s '|' | sed \
         -e "1s/.*/${BOLD}&${NC}/" \
         -e "s/\(Account[[:space:]]*\)\(.*\)/\1${RED}\2${NC}/" \
-        -e "s/\(Project[[:space:]]*\)\(.*\)/\1${BLUE}\2${NC}/"
+        -e "s/\(Configuration[[:space:]]*\)\(.*\)/\1${BLUE}\2${NC}/" \
+        -e "s/\(Project[[:space:]]*\)\(.*\)/\1${GREEN}\2${NC}/" \
+        -e "s/\(Region[[:space:]]*\)\(.*\)/\1${CYAN}\2${NC}/"
 
     printf "\n%s━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━%s\n\n" "${BOLD_GREEN}" "${NC}"
 }
@@ -665,59 +681,23 @@ select_gcloud_profile() {
         return 1
     fi
 
-    printf "\n%sAvailable GCloud Configurations:%s\n\n" "${BOLD_GREEN}" "${NC}"
+    # Auto-select if only one configuration available
+    if [ "$count" -eq 1 ]; then
+        local name active account project
+        IFS=':' read -r name active account project < "$temp_map"
 
-    {
-        printf "#|Config|Active|Account|Project\n"
-        printf "─|───────────────────────────|────────|────────────────────────────|────────────────────────────\n"
+        if ! gcloud config configurations activate "$name" > /dev/null 2>&1; then
+            printf "%sFailed to activate configuration: %s%s\n" "${RED}" "$name" "${NC}"
+            return 1
+        fi
 
-        local line_num=1
-        while IFS=':' read -r name active account project; do
-            printf "[%d]|%s|%s|%s|%s\n" "$line_num" "$name" "$active" "$account" "$project"
-            line_num=$((line_num + 1))
-        done < "$temp_map"
-    } | column -t -s '|' | sed \
-        -e "1s/.*/${BOLD}&${NC}/" \
-        -e "s/\(\[[[0-9]*\]\)/${BLUE}\1${NC}/g" \
-        -e "s/\(Active[[:space:]]*\)\(True\)/\1${GREEN}\2${NC}/" \
-        -e "s/\(Active[[:space:]]*\)\(False\)/\1${GRAY}\2${NC}/"
+        export GCLOUD_ACTIVE_CONFIG="$name"
+        export GCLOUD_ACCOUNT="$account"
+        export GCLOUD_PROJECT="$project"
 
-    printf "\n"
-
-    printf "\n%sSelect a configuration [1-%d]: %s" "${BOLD}" "$count" "${NC}"
-    read -r choice
-
-    if ! [[ "$choice" =~ ^[0-9]+$ ]] || [ "$choice" -lt 1 ] || [ "$choice" -gt "$count" ]; then
-        printf "%sInvalid selection.%s\n" "${RED}" "${NC}"
-        return 1
-    fi
-
-    choice_line=$(sed -n "${choice}p" "$temp_map")
-
-    local name active account project
-    IFS=':' read -r name active account project <<< "$choice_line"
-
-    if ! gcloud config configurations activate "$name" > /dev/null 2>&1; then
-        printf "%sFailed to activate configuration: %s%s\n" "${RED}" "$name" "${NC}"
-        return 1
-    fi
-
-    printf "%sSelected configuration: %s%s%s\n" "${GREEN}" "${BOLD}" "$name" "${NC}"
-}
-
-# shellcheck disable=SC2329
-select_gcloud_profile() {
-    local temp_map="$1"
-    local count=0
-    local choice_line=""
-
-    # Count configurations
-    count=$(wc -l < "$temp_map")
-
-    if [ "$count" -eq 0 ]; then
-        printf "%sError: No gcloud configurations found.%s\n" "${RED}" "${NC}"
-        printf "%sTip: Create one with: gcloud config configurations create <name>%s\n" "${GRAY}" "${NC}"
-        return 1
+        printf "\n%sAuto-selecting the only available configuration: %s%s%s (Account: %s)%s\n" \
+            "${GREEN}" "${BOLD}" "$name" "${NC}" "$account" "${NC}"
+        return 0
     fi
 
     printf "\n%sAvailable GCloud Configurations:%s\n\n" "${BOLD_GREEN}" "${NC}"
@@ -756,6 +736,10 @@ select_gcloud_profile() {
         printf "%sFailed to activate configuration: %s%s\n" "${RED}" "$name" "${NC}"
         return 1
     fi
+
+    export GCLOUD_ACTIVE_CONFIG="$name"
+    export GCLOUD_ACCOUNT="$account"
+    export GCLOUD_PROJECT="$project"
 
     printf "%sSelected configuration: %s%s%s\n" "${GREEN}" "${BOLD}" "$name" "${NC}"
 }
@@ -764,13 +748,13 @@ aws_session() {
     # Check if jq is installed
     if ! command -v jq > /dev/null 2>&1; then
         printf "%sError: jq is required to parse AWS response. Please install jq.%s\n" "${RED}" "${NC}"
-        exit 1
+        return 1
     fi
 
     # Check if aws cli is installed
     if ! command -v aws > /dev/null 2>&1; then
         printf "%sError: AWS CLI is required. Please install it.%s\n" "${RED}" "${NC}"
-        exit 1
+        return 1
     fi
 
     # Check if config file exists
@@ -903,6 +887,66 @@ aws_session() {
     _warn_if_expiring_soon "$AWS_PROFILE"
 }
 
+gcloud_logout() {
+    unset GCLOUD_ACTIVE_CONFIG
+    unset GCLOUD_ACCOUNT
+    unset GCLOUD_PROJECT
+
+    # Restore original prompt
+    if [ -n "${ORG_PROMPT:-}" ]; then
+        if [ -n "${ZSH_VERSION:-}" ]; then
+            export PROMPT="$ORG_PROMPT"
+        else
+            export PS1="$ORG_PROMPT"
+        fi
+    fi
+    unset ORG_PROMPT
+
+    printf "%sSuccessfully logged out. GCloud session cleared.%s\n" "${GREEN}" "${NC}"
+    return 0
+}
+
+gcloud_switch() {
+    if ! command -v jq > /dev/null 2>&1; then
+        printf "%sError: jq is required. Please install jq.%s\n" "${RED}" "${NC}"
+        return 1
+    fi
+
+    if ! command -v gcloud > /dev/null 2>&1; then
+        printf "%sError: gcloud CLI is required. Please install it.%s\n" "${RED}" "${NC}"
+        return 1
+    fi
+
+    local temp_map
+    temp_map=$(mktemp)
+
+    gcloud config configurations list --format=json 2>/dev/null | jq -r '.[] |
+      (.name) as $name |
+      (if .is_active then "True" else "False" end) as $active |
+      (.properties.core.account // "") as $account |
+      (.properties.core.project // "") as $project |
+      "\($name):\($active):\($account):\($project)"' > "$temp_map"
+
+    if ! select_gcloud_profile "$temp_map"; then
+        rm -f "$temp_map"
+        return 1
+    fi
+    rm -f "$temp_map"
+
+    local active_account
+    local active_project
+    active_account=$(gcloud config get-value account 2>/dev/null)
+    active_project=$(gcloud config get-value project 2>/dev/null)
+    [ "$active_project" = "(unset)" ] && active_project="(unset)"
+
+    export GCLOUD_ACCOUNT="$active_account"
+    export GCLOUD_PROJECT="$active_project"
+
+    _update_prompt "[gcloud:${active_account}:${active_project}] "
+    create_and_display_gcloud_table "$active_account" "$active_project"
+    return 0
+}
+
 gcloud_session() {
     local force_reauth=false
     if [[ "$1" == "--reauth" ]]; then
@@ -912,13 +956,13 @@ gcloud_session() {
     # Check if jq is installed
     if ! command -v jq > /dev/null 2>&1; then
         printf "%sError: jq is required to parse gcloud response. Please install jq.%s\n" "${RED}" "${NC}"
-        exit 1
+        return 1
     fi
 
     # Check if gcloud cli is installed
     if ! command -v gcloud > /dev/null 2>&1; then
         printf "%sError: gcloud CLI is required. Please install it.%s\n" "${RED}" "${NC}"
-        exit 1
+        return 1
     fi
 
     # Build configuration list for selection
@@ -978,9 +1022,11 @@ gcloud_session() {
     fi
 
     printf "%sSuccessfully authenticated with account: %s%s\n" "${GREEN}" "${BOLD}" "${active_account}${NC}"
+
+    export GCLOUD_ACCOUNT="$active_account"
+    export GCLOUD_PROJECT="$active_project"
+
     clear_terminal
     create_and_display_gcloud_table "$active_account" "$active_project"
-
-    export PROMPT="%F{green}${LOGNAME}@gcloud:${active_account}:${active_project}%f %F{blue}%~%f
-> "
+    _update_prompt "[gcloud:${active_account}:${active_project}] "
 }
