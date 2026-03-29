@@ -650,6 +650,7 @@ select_chained_profile() {
     printf "%sSwitched to chained profile: %s%s%s\n" "${GREEN}" "${BOLD}" "$profile" "${NC}"
 }
 
+# shellcheck disable=SC2329
 select_gcloud_profile() {
     local temp_map="$1"
     local count=0
@@ -701,9 +702,10 @@ select_gcloud_profile() {
         return 1
     fi
 
-    printf "%sSelected configuration: %s%s\n" "${GREEN}" "${BOLD}" "$name" "${NC}"
+    printf "%sSelected configuration: %s%s%s\n" "${GREEN}" "${BOLD}" "$name" "${NC}"
 }
 
+# shellcheck disable=SC2329
 select_gcloud_profile() {
     local temp_map="$1"
     local count=0
@@ -755,7 +757,7 @@ select_gcloud_profile() {
         return 1
     fi
 
-    printf "%sSelected configuration: %s%s\n" "${GREEN}" "${BOLD}" "$name" "${NC}"
+    printf "%sSelected configuration: %s%s%s\n" "${GREEN}" "${BOLD}" "$name" "${NC}"
 }
 
 aws_session() {
@@ -920,8 +922,9 @@ gcloud_session() {
     fi
 
     # Build configuration list for selection
-    local temp_map=$(mktemp)
-    trap "rm -f $temp_map" EXIT
+    local temp_map
+    temp_map=$(mktemp)
+    trap 'rm -f "$temp_map"' EXIT
 
     gcloud config configurations list --format=json 2>/dev/null | jq -r '.[] |
       (.name) as $name |
@@ -930,8 +933,7 @@ gcloud_session() {
       (.properties.core.project // "") as $project |
       "\($name):\($active):\($account):\($project)"' > "$temp_map"
 
-    select_gcloud_profile "$temp_map"
-    if [ $? -ne 0 ]; then
+    if ! select_gcloud_profile "$temp_map"; then
         return 1
     fi
 
