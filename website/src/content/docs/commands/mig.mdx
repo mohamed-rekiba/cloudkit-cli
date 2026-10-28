@@ -1,0 +1,100 @@
+---
+title: ck mig
+description: Reference for ck mig commands that list and describe Compute Engine managed instance groups and run rolling restarts or replacements.
+sidebar:
+  order: 6
+tableOfContents:
+  maxHeadingLevel: 2
+---
+
+import { Aside } from '@astrojs/starlight/components';
+import CommandFacts from '../../../components/CommandFacts.astro';
+
+`ck mig` works on Compute Engine **managed instance groups** (MIGs) in the terminal's gcloud configuration and project. A MIG runs identical VMs from an instance template; restarting or replacing its VMs is the usual way to roll out a new template or recover unhealthy instances.
+
+| Command | Purpose | Effect |
+|---|---|---|
+| [`list`](#ck-mig-list) | List groups | Read-only |
+| [`describe`](#ck-mig-describe) | Show a group's configuration | Read-only |
+| [`restart`](#ck-mig-restart) | Rolling restart of the group's VMs | Interrupts workloads |
+| [`recreate`](#ck-mig-recreate) | Rolling replacement of the group's VMs | Interrupts workloads |
+
+<Aside type="note" title="Regional groups only">
+`describe`, `restart` and `recreate` pass `--region` to gcloud, so they work with **regional** MIGs only. For zonal MIGs, use gcloud directly with `--zone`, for example `gcloud compute instance-groups managed rolling-action restart <group> --zone us-central1-a`.
+</Aside>
+
+`--region` must come **immediately after the group name**. Without it, these commands print `Error: --region is required` and return `1`.
+
+## ck mig list
+
+List managed instance groups, zonal and regional.
+
+<CommandFacts effect="read" runs="gcloud compute instance-groups managed list" needs="gcloud session; compute.instanceGroupManagers.list" />
+
+```text
+ck mig list [--region <region>]
+```
+
+| Option | Description |
+|---|---|
+| `--region <region>` | Optional. Only groups in this region (gcloud's `--regions`). |
+
+```bash
+ck mig list
+ck mig list --region us-central1
+```
+
+```text title="Output (illustrative)"
+NAME     LOCATION     SCOPE   BASE_INSTANCE_NAME  SIZE  TARGET_SIZE  INSTANCE_TEMPLATE  AUTOSCALED
+web-mig  us-central1  region  web-mig             3     3            web-template-v7    yes
+```
+
+## ck mig describe
+
+Show the full configuration and status of a regional group: template, target size, update policy, and whether the group is stable.
+
+<CommandFacts effect="read" runs="gcloud compute instance-groups managed describe <group> --region <region>" needs="gcloud session; compute.instanceGroupManagers.get" />
+
+```text
+ck mig describe <group> --region <region>
+```
+
+```bash
+ck mig describe web-mig --region us-central1
+```
+
+Output is gcloud's YAML description. During a rolling update, look for `status.isStable` and `currentActions`.
+
+## ck mig restart
+
+Restart every VM in the group, a few at a time. VMs keep their names and disks; each one is stopped and started again, so ephemeral external IPs can change.
+
+<CommandFacts effect="disrupt" runs="gcloud compute instance-groups managed rolling-action restart <group> --region <region>" needs="gcloud session; compute.instanceGroupManagers.update" />
+
+```text
+ck mig restart <group> --region <region>
+```
+
+```bash
+ck mig restart web-mig --region us-central1
+```
+
+## ck mig recreate
+
+Replace every VM in the group with a new VM created from the group's **current** instance template. Use it to roll out a new template, or when a restart is not enough.
+
+<CommandFacts effect="disrupt" runs="gcloud compute instance-groups managed rolling-action replace <group> --region <region>" needs="gcloud session; compute.instanceGroupManagers.update" />
+
+```text
+ck mig recreate <group> --region <region>
+```
+
+```bash
+ck mig recreate web-mig --region us-central1
+```
+
+Data on the replaced VMs' disks is lost unless the group uses stateful disks.
+
+<Aside type="danger" title="Rolling actions start immediately">
+`restart` and `recreate` run without confirmation and use gcloud's default rolling-update settings for how many VMs are unavailable at once. They return once the update has started; VMs keep restarting or being replaced afterwards. Watch progress with `ck mig describe` or `gcloud compute instance-groups managed list-instances <group> --region <region>`. To control the pace (`--max-unavailable`, `--max-surge`), run the gcloud command shown above directly.
+</Aside>

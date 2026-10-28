@@ -1,0 +1,98 @@
+---
+title: Connect to a Compute Engine VM
+description: SSH to a Google Compute Engine VM with ck gce ssh, with automatic zone lookup and optional IAP tunneling for VMs without an external IP.
+---
+
+import { Aside, Steps, Tabs, TabItem } from '@astrojs/starlight/components';
+
+`ck gce ssh` wraps `gcloud compute ssh`. It finds the VM's zone for you, offers a picker of running VMs, and can connect through Identity-Aware Proxy (IAP) so the VM needs no external IP.
+
+## Prerequisites
+
+- CloudKit with Google Cloud dependencies: `ck doctor` shows `✓ gcloud`.
+- A gcloud configuration whose project contains the VM.
+- SSH access to the VM, through one of:
+  - **OS Login** (`enable-oslogin=TRUE` metadata): your account needs `roles/compute.osLogin` or `roles/compute.osAdminLogin`.
+  - **Metadata SSH keys**: your account needs permission to set instance or project metadata so gcloud can add your key.
+- For IAP: a firewall rule allowing TCP 22 from `35.235.240.0/20`, and `roles/iap.tunnelResourceAccessor`. See [Permissions](/reference/permissions/#compute-engine).
+
+## Steps
+
+<Steps>
+
+1. Start a gcloud session:
+
+   ```bash
+   ck gcloud login
+   ```
+
+2. Connect. Choose the form that fits your network:
+
+   <Tabs>
+   <TabItem label="Pick from running VMs">
+
+   ```bash
+   ck gce ssh
+   ```
+
+   CloudKit lists running VMs with their zone and internal IP. With one running VM, it connects directly.
+
+   </TabItem>
+   <TabItem label="By name">
+
+   ```bash
+   ck gce ssh my-vm
+   ```
+
+   CloudKit prints `Using zone: us-central1-a` after looking it up. Add `--zone` to skip the lookup.
+
+   </TabItem>
+   <TabItem label="Through IAP">
+
+   ```bash
+   ck gce ssh my-vm --tunnel-iap
+   ```
+
+   Use this for VMs without an external IP, or when your firewall only allows SSH from IAP.
+
+   </TabItem>
+   </Tabs>
+
+3. The first time, gcloud may generate `~/.ssh/google_compute_engine` and ask for a passphrase, then propagate the key. This can take a minute.
+
+4. Leave the shell with `exit`.
+
+</Steps>
+
+## Run a single command
+
+Put the command after `--` so none of its words are taken as CloudKit flags:
+
+```bash
+ck gce ssh my-vm -- sudo systemctl status nginx
+ck gce ssh my-vm --zone us-central1-a -- df -h /
+```
+
+## Another project
+
+```bash
+ck gce ssh my-vm --project other-project
+```
+
+`--project` also scopes the zone lookup and the picker.
+
+## Common failures
+
+| Symptom | Likely cause |
+|---|---|
+| `Error: instance 'my-vm' not found. Pass --zone explicitly.` | Wrong project, or a typo in the name. Check with `ck gce ls`. |
+| `Error: instance 'my-vm' exists in multiple zones:` | Two VMs share the name. Pass `--zone`. |
+| `Connection timed out` on port 22 | No external IP or no firewall rule for your IP. Use `--tunnel-iap`. |
+| `failed to connect to backend` / error 4003 | IAP cannot reach port 22: add the `35.235.240.0/20` firewall rule. |
+| `Permission denied (publickey)` | The key was not accepted: check OS Login roles or metadata key permissions. |
+
+See [IAP or SSH connection fails](/troubleshooting/#iap-or-ssh-connection-fails).
+
+<Aside type="tip" title="Next">
+To reach a database on or behind the VM, see [Forward a port](/guides/port-forwarding/).
+</Aside>

@@ -1,0 +1,108 @@
+---
+title: CloudKit
+description: CloudKit is a set of bash and zsh helpers that puts AWS and Google Cloud sessions, SSM and IAP connections, and service shortcuts behind one ck command.
+template: splash
+hero:
+  tagline: One <code>ck</code> command for AWS and Google Cloud. Pick a profile, log in, and connect to your instances without memorizing long CLI flags.
+  image:
+    file: ../../assets/logo-icon.svg
+  actions:
+    - text: Get started
+      link: /getting-started/
+      icon: right-arrow
+    - text: Command reference
+      link: /commands/
+      icon: open-book
+      variant: minimal
+---
+
+import { Card, CardGrid, LinkCard, Steps } from '@astrojs/starlight/components';
+
+## What is CloudKit?
+
+<p class="ck-lede">
+CloudKit is a set of shell functions for <strong>bash</strong> and <strong>zsh</strong> on <strong>macOS</strong> and <strong>Linux</strong>. It wraps the AWS CLI and the Google Cloud CLI (<code>gcloud</code>) behind a single <code>ck</code> command, so the everyday work of picking an account, logging in, and reaching a machine takes one short command instead of several long ones.
+</p>
+
+It is for developers and DevOps engineers who already use AWS or Google Cloud from a terminal and switch between several accounts, projects, or environments during the day. CloudKit does not replace `aws` or `gcloud`: it calls them for you, with your existing profiles and configurations, and everything it does can still be done with the native CLIs.
+
+```bash frame="terminal" title="A typical session"
+ck aws login                 # pick an SSO profile, log in only if needed, show the session
+ck ec2 session               # pick a running instance and open an SSM shell
+ck ec2 port-forward 5432 5433 i-0123456789abcdef0 mydb.example.internal
+ck gcloud login              # pick a gcloud configuration for this terminal only
+ck gce ssh my-vm --forward 3308:127.0.0.1:3306 --tunnel-only
+ck status                    # what is this terminal connected to?
+```
+
+## What it does
+
+<CardGrid>
+	<Card title="Per-terminal sessions" icon="seti:shell">
+		Each terminal has its own AWS profile and gcloud configuration. Logging in to production in
+		one window never changes another. The prompt shows `[profile:region]` and
+		`[gcloud:account:project]`.
+	</Card>
+	<Card title="Login that checks first" icon="approve-check">
+		`ck aws login` runs `aws sso login` only when the cached credentials are missing or expired,
+		then shows account, identity, region and credential expiry in one table.
+	</Card>
+	<Card title="Connect without SSH keys or public IPs" icon="rocket">
+		Open shells and forward ports through AWS Systems Manager (SSM) and Google Identity-Aware
+		Proxy (IAP), including tunnels to private databases.
+	</Card>
+	<Card title="Production guardrails" icon="warning">
+		Profiles, configurations and projects whose names look like production get a red
+		**▲ PRODUCTION** banner and a `[PROD]` prompt marker. The pattern is configurable.
+	</Card>
+</CardGrid>
+
+## Compared with the native CLIs
+
+| Task | AWS CLI / gcloud | CloudKit |
+|---|---|---|
+| Use a profile in this terminal and log in if needed | `export AWS_PROFILE=dev-admin`, `aws sts get-caller-identity`, then `aws sso login` if it failed | `ck aws login` |
+| Shell on an instance whose ID you don't remember | `aws ec2 describe-instances --filters … --query …`, then `aws ssm start-session --target i-…` | `ck ec2 session` |
+| Tunnel to a private RDS database | `aws ssm start-session --document-name AWS-StartPortForwardingSessionToRemoteHost --parameters '{"host":[…],"portNumber":[…],"localPortNumber":[…]}' --target i-…` | `ck ec2 port-forward 5432 5433 i-… <db-host>` |
+| Use a gcloud configuration in one terminal only | `export CLOUDSDK_ACTIVE_CONFIG_NAME=staging` | `ck gcloud login` |
+| SSH to a VM without knowing its zone | `gcloud compute instances list --filter=…`, then `gcloud compute ssh my-vm --zone …` | `ck gce ssh my-vm` |
+
+CloudKit adds no agents, servers or credential stores. It reads your existing `~/.aws/config` and gcloud configurations and exports ordinary environment variables such as `AWS_PROFILE`. See [How CloudKit works](/concepts/how-it-works/).
+
+## Install and run a first command
+
+<Steps>
+
+1. Install CloudKit and the dependencies for the clouds you use:
+
+   ```bash
+   curl -fsSL https://github.com/shabayekdes/cloudkit-cli/releases/latest/download/install.sh | bash
+   ```
+
+2. Open a new terminal and check the installation:
+
+   ```bash
+   ck doctor
+   ```
+
+3. Log in and look around:
+
+   ```bash
+   ck aws login      # or: ck gcloud login
+   ck ec2 ls         # or: ck gce ls
+   ```
+
+</Steps>
+
+The [Quick start](/getting-started/) walks through each step, including credential setup.
+
+## Common tasks
+
+<CardGrid>
+	<LinkCard title="Connect to an EC2 instance" href="/guides/connect-ec2/" description="SSM shell sessions with no SSH keys or open ports." />
+	<LinkCard title="Connect to a Compute Engine VM" href="/guides/connect-gce/" description="SSH with automatic zone lookup, optionally through IAP." />
+	<LinkCard title="Reach a private database" href="/guides/port-forwarding/" description="Forward a local port to RDS or Cloud SQL through an instance." />
+	<LinkCard title="Run a command in an ECS container" href="/guides/ecs/" description="Find the task and container, then use ECS Exec." />
+	<LinkCard title="Switch between environments" href="/guides/environments/" description="Keep dev, staging and production in separate terminals." />
+	<LinkCard title="Fix a failing command" href="/troubleshooting/" description="Symptoms, causes and fixes, starting with ck doctor." />
+</CardGrid>

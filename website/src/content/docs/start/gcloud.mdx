@@ -1,0 +1,103 @@
+---
+title: First steps with Google Cloud
+description: Prepare gcloud configurations for CloudKit, log in with ck gcloud login, and run a first Compute Engine workflow.
+---
+
+import { Aside, Steps } from '@astrojs/starlight/components';
+
+CloudKit works with **gcloud configurations**: named sets of properties (account, project, region, zone) stored under `~/.config/gcloud/configurations/`. Each one plays the role of an AWS profile.
+
+**Prerequisites:** CloudKit installed with Google Cloud dependencies (`ck doctor` shows `✓ gcloud`).
+
+## 1. Create a configuration
+
+```bash
+ck setup gcloud
+```
+
+<Steps>
+
+1. Enter a configuration name: lowercase letters, digits and `-`, starting with a letter (for example `staging`). An existing name can be updated.
+2. Enter the Google account email (or leave it empty to choose in the browser), the project ID, a default region (default `us-central1`) and zone (default `<region>-a`).
+3. Log in in the browser. CloudKit skips this if the account already has credentials, unless you ask to log in again.
+4. Optionally set [Application Default Credentials](#application-default-credentials) for SDKs and Terraform.
+5. Optionally start a session with the new configuration in the current terminal.
+
+</Steps>
+
+`ck setup gcloud` creates the configuration with `--no-activate`, so gcloud's global active configuration (used by other terminals and tools) does not change.
+
+The equivalent native commands, if you prefer them:
+
+```bash
+gcloud config configurations create staging --no-activate
+gcloud config set core/account you@example.com --configuration=staging
+gcloud config set core/project my-project --configuration=staging
+gcloud config set compute/region us-central1 --configuration=staging
+gcloud config set compute/zone us-central1-a --configuration=staging
+```
+
+## 2. Log in
+
+```bash
+ck gcloud login
+```
+
+CloudKit lists your configurations (or selects the only one) and makes the chosen one active **for this terminal only** by exporting `CLOUDSDK_ACTIVE_CONFIG_NAME`. It then checks the credentials with `gcloud auth print-access-token` and runs `gcloud auth login` only if that fails. Use `ck gcloud login --reauth` to force a new browser login.
+
+```text title="Example output (illustrative values)"
+━━━ GCloud Session Information ━━━
+
+Info           Value
+────────────   ────────────────────────────────────────────────────────
+Account        you@example.com
+Configuration  staging
+Project        my-project
+Region         us-central1
+Token Expiry   2026-10-21 15:10 UTC (auto-refresh)
+ADC            same as gcloud account
+```
+
+<Aside type="note" title="New terminals start without a gcloud account">
+Every new terminal starts with no gcloud account selected, so `gcloud` commands fail with `You do not currently have an active account selected` until you run `ck gcloud login`. This prevents a terminal from silently using whatever configuration was active globally. Set [`CLOUDKIT_GCLOUD_GLOBAL=1`](/configuration/#cloudkit_gcloud_global) to keep gcloud's global configuration instead.
+</Aside>
+
+## 3. Run a first workflow
+
+```bash
+ck gce ls                       # all VMs in the project
+ck gce ls-running               # running VMs only
+ck gce ssh                      # pick a running VM and SSH to it
+ck gce ssh my-vm "uptime"       # run one command; the zone is looked up for you
+ck mig list                     # managed instance groups
+```
+
+The first `ck gce ssh` may ask `gcloud` to generate an SSH key and propagate it to the project or OS Login. That is standard `gcloud compute ssh` behavior. See [Connect to a Compute Engine VM](/guides/connect-gce/).
+
+## 4. Check and end the session
+
+```bash
+ck status          # configuration, account and project of this terminal
+ck gcloud logout   # return this terminal to "no account selected"
+```
+
+`ck gcloud logout` does not revoke credentials. To remove stored credentials, use `gcloud auth revoke <account>`.
+
+## Application Default Credentials
+
+Application Default Credentials (ADC) are what client libraries and tools such as Terraform use. They are separate from the credentials the `gcloud` command uses. The **ADC** row of the session table compares them:
+
+| ADC row | Meaning |
+|---|---|
+| `same as gcloud account` | ADC belongs to the same user as the session |
+| `⚠ different account: …` | ADC belongs to another user. Run `gcloud auth application-default login` if your tools should act as the session's account. |
+| `⚠ not set -- run: gcloud auth application-default login` | No ADC file. Only needed if you use SDKs or Terraform. |
+| `service account …` / `impersonating …` | ADC is a service account key or impersonation |
+
+ADC is global: CloudKit does not switch it per terminal.
+
+## Next
+
+- [Connect to a Compute Engine VM](/guides/connect-gce/)
+- [Forward a port and reach a private database](/guides/port-forwarding/)
+- [Sessions and credentials](/sessions/)

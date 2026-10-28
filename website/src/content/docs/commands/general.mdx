@@ -1,0 +1,77 @@
+---
+title: ck status, version and help
+description: Reference for ck status, ck version and ck help.
+sidebar:
+  label: ck status / version / help
+  order: 8
+tableOfContents:
+  maxHeadingLevel: 2
+---
+
+import CommandFacts from '../../../components/CommandFacts.astro';
+
+## ck status
+
+Show the AWS and gcloud sessions of the current terminal.
+
+<CommandFacts effect="read" runs="(no cloud calls)" needs="Nothing" />
+
+```text
+ck status
+```
+
+```text title="Output (illustrative)"
+━━━ CloudKit Status ━━━
+
+Cloud   Info           Value
+──────  ────────────   ────────────────────────────────────────
+AWS     Profile        dev-admin
+AWS     Account        111111111111
+AWS     Region         eu-west-1
+GCloud  Configuration  staging
+GCloud  Account        you@example.com
+GCloud  Project        my-project
+```
+
+Without a session, the rows read `not logged in (ck aws login)` and `not logged in (ck gcloud login)`.
+
+`ck status` reads only environment variables (and, with `CLOUDKIT_GCLOUD_GLOBAL=1`, gcloud's local configuration files). It is instant but cannot tell whether credentials are still valid. See [Checking the current session](/sessions/#checking-the-current-session).
+
+## ck version
+
+Print the installed CloudKit version.
+
+<CommandFacts effect="read" runs="(no cloud calls)" needs="Nothing" />
+
+```text
+ck version
+ck --version
+ck -v
+```
+
+```text title="Output"
+CloudKit v2.0.2
+```
+
+The version is the release tag recorded by the installer in `.cloudkit-version`. For a Git clone without that file, it is `git describe --tags` (for example `v2.0.2-3-gf5a8115` for three commits after `v2.0.2`). If neither is available, it prints `unknown`.
+
+## ck help
+
+Show help in the terminal.
+
+```text
+ck help [command]
+ck -h
+ck --help
+```
+
+| Argument | Description |
+|---|---|
+| `command` | Optional. One of `aws`, `gcloud`, `ec2`, `ecs`, `gce`, `mig`, `setup`, `doctor`. |
+
+```bash
+ck help          # every command family
+ck help gce      # gce subcommands, options and examples
+```
+
+Running `ck` with no arguments also prints the overview and returns `1`. An unknown command prints `Unknown command: <name>` followed by the overview.

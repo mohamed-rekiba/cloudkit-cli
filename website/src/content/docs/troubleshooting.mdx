@@ -1,0 +1,299 @@
+---
+title: Troubleshooting
+description: Symptoms, causes, diagnostic commands and fixes for CloudKit installation, session, SSM, ECS Exec, IAP, port-forwarding, file transfer and shell problems.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+Find your symptom below. Each entry lists likely causes, commands to confirm the cause, the fix, and how to verify it. If you don't know where to start, follow [Diagnose an installation or authentication failure](/guides/diagnose/).
+
+<Aside type="tip" title="Whose error is it?">
+Messages starting with `An error occurred (…)` come from the AWS CLI, and messages starting with `ERROR: (gcloud…)` come from gcloud: they describe authentication, IAM, network or resource problems that CloudKit passes through unchanged. CloudKit's own messages are short (`Error: --region is required`, `No running instances found.`). [`ck doctor`](/commands/setup/#ck-doctor) checks local tools and configuration only; it does not contact the clouds.
+</Aside>
+
+## Installation
+
+### `ck: command not found`
+
+**Symptoms:** `ck: command not found` (bash) or `command not found: ck` (zsh).
+
+**Causes:**
+- The terminal was opened before installing, so the rc file was not reloaded.
+- The installer ran with `--no-rc`, or your shell's rc file is not the one the installer edited (for example, bash on macOS reads `~/.bash_profile`).
+- `main.sh` was executed (`bash main.sh`) instead of sourced.
+
+**Diagnose:**
+
+```bash
+echo "$SHELL"
+grep -n -A2 '>>> cloudkit >>>' ~/.zshrc ~/.bashrc ~/.bash_profile 2>/dev/null
+```
+
+**Fix:** Open a new terminal or run `exec "$SHELL"`. If no block is found, re-run the installer, or add `source ~/.cloudkit/main.sh` to your shell's rc file.
+
+**Verify:** `ck version` prints a version.
+
+### Missing dependencies
+
+**Symptoms:** `ck doctor` shows `✗`; commands print `Error: jq is required…`, `Error: AWS CLI is required…`, `Error: gcloud CLI is required…`, or `SessionManagerPlugin is not found`.
+
+**Causes:** The installer skipped a tool (you declined, or no supported package manager), or the tool is installed outside `PATH`.
+
+**Diagnose:**
+
+```bash
+ck doctor
+command -v jq python3 aws session-manager-plugin gcloud
+aws --version          # must start with aws-cli/2
+```
+
+**Fix:** Follow the hint on each `✗` line. To install specific tools with the installer, use `--deps`, for example `~/.cloudkit/install.sh --deps jq,python3`; for a whole cloud, re-run it with `--aws` or `--gcp`. On Linux distributions without `apt`/`dnf`/`yum`, install the Session Manager plugin by hand from the [AWS instructions](https://docs.aws.amazon.com/systems-manager/latest/userguide/session-manager-working-with-install-plugin.html). If AWS CLI v1 shadows v2, remove v1 or put v2 earlier in `PATH`.
+
+**Verify:** `ck doctor` ends with `All required tools are installed.`
+
+### Installer fails
+
+**Symptoms:** The installer stops with `exists and is not a CloudKit install`, a package manager error, or `Not installed: …`.
+
+**Fix:**
+- `… exists and is not a CloudKit install; pick another with --dir`: the target directory has other files. Use `--dir` or remove it.
+- Package manager errors: run the failed install command yourself (often a `sudo` or repository issue), then re-run the installer with `--no-deps`.
+- To install without changing rc files or packages: `--no-deps --no-rc`, then [load CloudKit manually](/start/installation/#manual-installation).
+
+## AWS sessions
+
+### No profiles in `ck aws login`
+
+**Symptoms:** `Error: No profiles found in ~/.aws/config`, or your profile is missing from the list.
+
+**Causes:** `ck aws login` lists only profiles that contain `sso_account_id`. Access-key, `credential_process` and role profiles are not listed there, and profiles defined only in `~/.aws/credentials` or in a file set with `AWS_CONFIG_FILE` are never listed.
+
+**Diagnose:**
+
+```bash
+aws configure list-profiles
+grep -n '^\[' ~/.aws/config
+```
+
+**Fix:** Use `ck aws switch` for non-SSO profiles. For a profile that only exists in `~/.aws/credentials`, add `[profile <name>]` with a `region` to `~/.aws/config`. To add an SSO profile, run `ck setup aws`.
+
+**Verify:** The profile appears in `ck aws switch` (or `ck aws login` for SSO).
+
+### Expired or failing SSO login
+
+**Symptoms:** `AWS credentials expired. Initiating SSO login...` every time; `Failed to authenticate`; AWS commands report `Token has expired` or `The SSO session associated with this profile has expired`.
+
+**Causes:** The SSO token expired, the browser login was cancelled, or the profile's SSO settings are wrong.
+
+**Diagnose:**
+
+```bash
+aws sts get-caller-identity --profile dev-admin
+aws configure get sso_session --profile dev-admin
+```
+
+**Fix:** Run `ck aws login` and complete the browser login. If the browser does not open, copy the URL and code that `aws sso login` prints. For persistent failures, re-create the profile with `aws configure sso`.
+
+**Verify:** `ck aws login` prints `Credentials are valid and not expired` on the next run.
+
+### Wrong or invalid region
+
+**Symptoms:** `You must specify a region`, or commands list nothing although resources exist.
+
+**Cause:** The profile has no `region` (CloudKit then leaves `AWS_REGION` unset), or the resources are in another region.
+
+**Fix:** Add `region = <region>` to the profile and log in again, or run one command with `AWS_REGION=<region> ck …`. See [Accounts, regions and projects](/concepts/targeting/).
+
+**Verify:** `ck status` shows the expected region.
+
+### Chained profile is not offered or fails
+
+**Symptoms:** No chained-profile prompt after login, or `Failed to get identity for chained profile` followed by `Falling back to base profile`.
+
+**Causes:** The role profile's `source_profile` does not exactly match the profile you logged in with; or the role's trust policy does not allow your identity; or you lack `sts:AssumeRole`.
+
+**Diagnose:**
+
+```bash
+aws sts get-caller-identity --profile prod-deploy
+```
+
+**Fix:** Correct `source_profile`, or ask the role's owner to trust your SSO role. You can also select the role profile directly with `ck aws switch`.
+
+## Google Cloud sessions
+
+### gcloud says no active account in a new terminal
+
+**Symptoms:** `ERROR: (gcloud…) You do not currently have an active account selected.`
+
+**Cause:** Expected behavior. Each new terminal starts with no gcloud account until you pick one.
+
+**Fix:** Run `ck gcloud login` (or `ck gcloud switch`). To keep gcloud's global configuration in new terminals, set [`CLOUDKIT_GCLOUD_GLOBAL=1`](/configuration/#cloudkit_gcloud_global) before the CloudKit block in your rc file.
+
+**Verify:** `gcloud config list account` shows your account.
+
+### No configurations, wrong account or wrong project
+
+**Symptoms:** `Error: No gcloud configurations found.`; the session table shows `Project (unset)` or an unexpected account.
+
+**Diagnose:**
+
+```bash
+gcloud config configurations list
+gcloud auth list
+```
+
+**Fix:** Create or update the configuration with `ck setup gcloud`. Set a project on an existing configuration with `gcloud config set project <project> --configuration <name>`.
+
+### gcloud credentials expired
+
+**Symptoms:** `Reauthentication failed`, `invalid_grant`, or `⚠ CRITICAL: GCloud credentials have expired and cannot refresh.`
+
+**Fix:** `ck gcloud login --reauth`.
+
+**Verify:** `gcloud auth print-access-token > /dev/null && echo OK`.
+
+### Application Default Credentials mismatch
+
+**Symptoms:** The session table shows `ADC ⚠ different account: …` or `⚠ not set`; Terraform or an SDK uses the wrong identity although `gcloud` works.
+
+**Cause:** ADC is separate from gcloud's own credentials and is not switched per terminal.
+
+**Fix:** `gcloud auth application-default login`, or set `GOOGLE_APPLICATION_CREDENTIALS` for tools that need a specific identity.
+
+## Connections
+
+### SSM session fails to start
+
+**Symptoms:** `ck ec2 session` or `port-forward` fails with `TargetNotConnected`, `An error occurred (TargetNotConnected) … is not connected`, or hangs.
+
+**Causes:**
+- The instance is not registered with Systems Manager: SSM Agent not running, no instance profile with `AmazonSSMManagedInstanceCore`, or no outbound route to the SSM endpoints.
+- The instance is stopped, or in another region.
+
+**Diagnose:**
+
+```bash
+ck status
+aws ssm describe-instance-information \
+  --filters "Key=InstanceIds,Values=i-0123456789abcdef0" \
+  --query 'InstanceInformationList[].PingStatus'
+```
+
+An empty result means the instance is not managed by SSM.
+
+**Fix:** Attach an instance profile with `AmazonSSMManagedInstanceCore`, make sure SSM Agent runs, and allow outbound HTTPS (NAT gateway or VPC endpoints for `ssm`, `ssmmessages`, `ec2messages`). Allow several minutes after attaching a role. If the error is `AccessDeniedException`, see [Access denied](#access-denied-or-permission-denied).
+
+**Verify:** `PingStatus` is `Online`, then `ck ec2 session i-…` opens a shell.
+
+### ECS Exec fails
+
+**Symptoms:** `The execute command failed because execute command was not enabled when the task was run…`, `TargetNotConnectedException`, or `Failed to start pty: fork/exec /bin/bash: no such file or directory`.
+
+**Diagnose:**
+
+```bash
+aws ecs describe-tasks --cluster my-cluster --tasks 0123456789abcdef0123456789abcdef \
+  --query 'tasks[0].{exec:enableExecuteCommand,agents:containers[].managedAgents}'
+```
+
+`exec` must be `true`, and the `ExecuteCommandAgent` should be `RUNNING`.
+
+**Fix:**
+- Not enabled: `aws ecs update-service --cluster my-cluster --service my-service --enable-execute-command --force-new-deployment` (replaces the running tasks).
+- Agent not running / not connected: add the `ssmmessages` permissions to the **task role** and give private subnets a route to `ssmmessages`.
+- No bash: pass a command, for example `ck ecs exec my-cluster <task-id> app sh`.
+
+**Verify:** `ck ecs exec … app sh` opens a shell. See [the ECS guide](/guides/ecs/#prerequisites-for-ecs-exec).
+
+### GCE instance not found or in multiple zones
+
+**Symptoms:** `Error: instance 'my-vm' not found. Pass --zone explicitly.` or `Error: instance 'my-vm' exists in multiple zones:`.
+
+**Causes:** The VM is in another project, the name is misspelled, or two VMs in different zones share the name.
+
+**Fix:** Check with `ck gce ls --filter my-vm`. Pass `--project` for another project, or `--zone` to pick one of the listed zones.
+
+### IAP or SSH connection fails
+
+**Symptoms:** `failed to connect to backend` (error 4003), `Error while connecting [4033: 'not authorized']`, `Connection timed out`, `Permission denied (publickey)`.
+
+| Message | Cause | Fix |
+|---|---|---|
+| `4003: failed to connect to backend` | No firewall rule from `35.235.240.0/20` to the port | Add the [IAP firewall rule](/reference/permissions/#compute-engine) |
+| `4033: not authorized` | Missing `iap.tunnelInstances.accessViaIAP` | Grant `roles/iap.tunnelResourceAccessor` |
+| `Connection timed out` without IAP | No external IP or no SSH firewall rule for your IP | Add `--tunnel-iap` |
+| `Permission denied (publickey)` | OS Login role missing, or key not propagated | Grant `roles/compute.osLogin`; retry after a minute |
+
+**Diagnose:** Rerun the underlying command with more detail: `gcloud compute ssh my-vm --zone us-central1-a --tunnel-through-iap --troubleshoot`.
+
+**Verify:** `ck gce ssh my-vm --tunnel-iap -- true` exits without error.
+
+### Port forward fails or the local port is busy
+
+**Symptoms:** The tunnel exits immediately; `address already in use`; clients connecting to `localhost:<port>` hang or get `Connection refused`.
+
+**Causes:**
+- The local port is used by another program (often a local database).
+- The target host does not accept traffic from the instance or VM (security group or firewall).
+- The host name is wrong or does not resolve from the instance.
+
+**Diagnose:**
+
+```bash
+lsof -iTCP:5433 -sTCP:LISTEN          # is the local port free?
+ck ec2 session i-0123456789abcdef0    # then, on the instance:
+nc -vz mydb.example.internal 5432
+```
+
+On Google Cloud, test from the VM with `ck gce ssh my-vm -- nc -vz 10.20.0.5 3306`.
+
+**Fix:** Pick a free local port; allow the instance's security group (or the VM's network) in the database's inbound rules; use the endpoint shown by the cloud console.
+
+**Verify:** Your client connects to `localhost:<local-port>`.
+
+### Access denied or permission denied
+
+**Symptoms:** `AccessDenied`, `AccessDeniedException`, `UnauthorizedOperation`, `is not authorized to perform: <action>`, `PERMISSION_DENIED`, `Required '<permission>' permission`.
+
+**Cause:** The identity of the current session lacks an IAM permission. CloudKit cannot work around this.
+
+**Diagnose:** Check which identity is in use with the `Identity` row of `ck aws login` / `aws sts get-caller-identity`, or `gcloud auth list`. The error names the action or permission.
+
+**Fix:** Switch to a profile or account with the permission, or ask your administrator for the action listed in [Permissions](/reference/permissions/). Do not work around it with broader long-lived credentials.
+
+## Files
+
+### File transfer fails
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| `ck gce scp`: `scp: … Permission denied` | Your SSH user cannot write to the destination | Copy to `/tmp`, then move with `sudo` |
+| `AccessDenied` from `aws s3 cp` (EC2 transfers) | Your identity or the instance role cannot access the bucket | Grant `s3:PutObject` / `s3:GetObject` on the bucket |
+| `ck gce scp`: `Error: one of source/destination must be a remote path` | No argument looks like `instance:path` | Write the remote side as `my-vm:/path`; prefix local paths containing `:` with `./` |
+
+## Shell
+
+### Shell start-up or prompt conflicts
+
+**Symptoms:** The `[profile:region]` prefix is missing, duplicated, or stays after logout; your prompt theme shows a different cloud context; colors or functions behave unexpectedly after loading CloudKit.
+
+**Causes:**
+- A prompt theme (Starship, Powerlevel10k, oh-my-posh and similar) rebuilds the prompt on each command.
+- Your rc file defines functions or variables with the same names CloudKit uses (`RED`, `NC`, `select_profile`, …). See [Shell namespace](/reference/limitations/#platform).
+- `PROMPT_COMMAND` (bash) rewrites `PS1`.
+
+**Fix:**
+- Set `CLOUDKIT_NO_PROMPT=1` and use your theme's AWS and gcloud segments, which read the variables CloudKit sets.
+- Rename conflicting variables in your rc file, or source CloudKit after them and check which definition you need.
+- To restore your original prompt in the current terminal, log out of all sessions (`ck aws logout`, `ck gcloud logout`).
+
+**Verify:** Open a new terminal, log in, and check the prompt.
+
+### Screen is cleared after login
+
+This is intentional, so the session table starts at the top. Set [`CLOUDKIT_NO_CLEAR=1`](/configuration/#cloudkit_no_clear) to keep earlier output.
+
+## Still stuck?
+
+Collect `ck version`, `ck doctor`, your OS and shell, and the exact error with identifiers removed, then [open an issue](https://github.com/shabayekdes/cloudkit-cli/issues). Never include credentials, tokens or account details. See [Collecting information for an issue](/guides/diagnose/#collecting-information-for-an-issue).

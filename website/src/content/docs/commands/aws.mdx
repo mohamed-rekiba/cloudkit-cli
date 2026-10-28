@@ -1,0 +1,146 @@
+---
+title: ck aws
+description: Reference for ck aws login, switch, sso and logout, which manage the AWS profile of the current terminal.
+sidebar:
+  order: 1
+tableOfContents:
+  maxHeadingLevel: 2
+---
+
+import { Aside } from '@astrojs/starlight/components';
+import CommandFacts from '../../../components/CommandFacts.astro';
+
+`ck aws` manages the AWS session of the current terminal. For the model behind these commands (which variables are set, expiry warnings, chained profiles), see [Sessions and credentials](/sessions/).
+
+| Command | Purpose |
+|---|---|
+| [`login`](#ck-aws-login) | Pick an SSO profile, log in if needed, show the session |
+| [`switch`](#ck-aws-switch) | Switch to any profile |
+| [`sso`](#ck-aws-sso) | Run `aws sso login` for a profile |
+| [`logout`](#ck-aws-logout) | Clear the session from this terminal |
+
+**Requires:** AWS CLI v2 and `jq` for `login` and `switch`; a `~/.aws/config` file.
+
+## ck aws login
+
+Start an AWS session in this terminal with an IAM Identity Center (SSO) profile. Use it at the start of the day or when credentials expire.
+
+<CommandFacts
+	effect="local"
+	runs={['aws sts get-caller-identity', 'aws configure export-credentials', 'aws sso login']}
+	needs="aws, jq, ~/.aws/config with at least one profile that has sso_account_id"
+/>
+
+```text
+ck aws login
+```
+
+Takes no arguments.
+
+### Behavior
+
+1. Lists profiles in `~/.aws/config` that contain `sso_account_id`, with their account and region, and asks for a number. With one profile, selects it automatically.
+2. Exports `AWS_PROFILE`, `AWS_DEFAULT_PROFILE`, `AWS_REGION`, `AWS_DEFAULT_REGION` and `AWS_ACCOUNT_ID`.
+3. Checks the credentials. If the identity call fails or the credentials have expired, runs `aws sso login --profile <profile>` (opens a browser) and checks again.
+4. Offers [chained profiles](/sessions/#chained-profiles) whose `source_profile` is the selected profile.
+5. Clears the screen (see [`CLOUDKIT_NO_CLEAR`](/configuration/#cloudkit_no_clear)), prints the session table, updates the prompt, and warns if the credentials expire within 15 minutes.
+
+```text title="Profile picker (illustrative)"
+Available AWS Profiles:
+
+#    Profile      Account       Region
+─    ───────────  ────────────  ──────────
+[1]  dev-admin    111111111111  eu-west-1
+[2]  prod-admin   222222222222  eu-west-1
+
+Select a profile [1-2]:
+```
+
+```text title="Session table (illustrative)"
+━━━ AWS Session Information ━━━
+
+Info         Value
+────────────  ────────────────────────────────────────────────────────
+Account      1111-1111-1111
+Profile      dev-admin
+Region       eu-west-1
+Identity     SSO AdministratorAccess as jane@example.com
+Credentials  SSO · expires 2026-10-21 14:20 UTC (in 7h 12m)
+```
+
+For a production profile, a red **▲ PRODUCTION** banner appears above the table. See [production detection](/concepts/prompt-and-production/#production-detection).
+
+### Errors
+
+| Message | Cause |
+|---|---|
+| `Error: No profiles found in ~/.aws/config` | No profile has `sso_account_id`. Use [`ck aws switch`](#ck-aws-switch) for other profile types, or run `ck setup aws`. |
+| `Invalid selection.` | The number was out of range. Nothing is exported. |
+| `Failed to authenticate` followed by the AWS error | SSO login failed or was cancelled. The profile stays exported; run `ck aws logout` or try again. |
+| `Error: jq is required…`, `Error: AWS CLI is required…`, `Error: ~/.aws/config not found` | Missing prerequisite. Run `ck doctor`. |
+
+**Related:** [`ck aws switch`](#ck-aws-switch), [`ck status`](/commands/general/#ck-status), [Troubleshooting: AWS](/troubleshooting/#aws-sessions)
+
+## ck aws switch
+
+Switch this terminal to another profile of **any** type: SSO, access keys, `credential_process`, or role.
+
+<CommandFacts
+	effect="local"
+	runs={['aws sts get-caller-identity', 'aws configure export-credentials', 'aws sso login (SSO profiles only)']}
+	needs="aws, jq, ~/.aws/config"
+/>
+
+```text
+ck aws switch
+```
+
+Takes no arguments.
+
+### Behavior
+
+- Lists every `[profile …]` section and `[default]` in `~/.aws/config`. The **Account** column shows the SSO account ID, `(keys)`, `(process)`, or `N/A` (for example, for role profiles).
+- Exports the same variables as `login`, then validates with `aws sts get-caller-identity`.
+- For an SSO profile whose check fails, runs `aws sso login` once. For other profiles, prints `Failed to authenticate with profile: <name>` and returns `1`.
+- Does not offer chained profiles and does not check the expiry time before the identity call; select the role profile directly instead.
+- Prints the same session table and expiry warning as `login`.
+
+<Aside type="caution">
+For a profile without a `region`, CloudKit unsets `AWS_REGION` and `AWS_DEFAULT_REGION`, and AWS commands fail with `You must specify a region`. Give every profile a `region`. See [Accounts, regions and projects](/concepts/targeting/).
+</Aside>
+
+**Related:** [`ck aws login`](#ck-aws-login), [Switch between environments](/guides/environments/)
+
+## ck aws sso
+
+Refresh the SSO token for a profile without changing this terminal's session. Useful before running scripts that use `--profile`.
+
+<CommandFacts effect="local" runs="aws sso login --profile <profile>" needs="aws" />
+
+```text
+ck aws sso <profile>
+```
+
+| Argument | Description |
+|---|---|
+| `profile` | Required. A profile name from `~/.aws/config`. |
+
+```bash
+ck aws sso dev-admin
+```
+
+Without a profile, prints `Usage: ck aws sso <profile>` and returns `1`. Exit status and output are those of `aws sso login`.
+
+## ck aws logout
+
+Clear the AWS session from this terminal.
+
+<CommandFacts effect="local" runs="(no cloud calls)" needs="Nothing" />
+
+```text
+ck aws logout
+```
+
+Unsets `AWS_PROFILE`, `AWS_DEFAULT_PROFILE`, `AWS_REGION`, `AWS_DEFAULT_REGION` and `AWS_ACCOUNT_ID`, removes the AWS segment from the prompt, and prints `Successfully logged out. AWS session cleared.`
+
+It does not delete anything under `~/.aws`, end the SSO session, or affect other terminals. To end the SSO session everywhere, run `aws sso logout`.

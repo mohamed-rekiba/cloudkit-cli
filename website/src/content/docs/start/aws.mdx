@@ -1,0 +1,129 @@
+---
+title: First steps with AWS
+description: Prepare AWS profiles for CloudKit, log in with ck aws login, and run a first EC2 and ECS workflow.
+---
+
+import { Aside, Steps, Tabs, TabItem } from '@astrojs/starlight/components';
+
+CloudKit uses the profiles in `~/.aws/config`. If the AWS CLI already works for you with `--profile`, CloudKit will too; this page explains which profiles each command lists and walks through a first session.
+
+**Prerequisites:** CloudKit installed with AWS dependencies (`ck doctor` shows `✓ aws` and `✓ session-manager-plugin`).
+
+## 1. Have a profile CloudKit can list
+
+CloudKit reads `~/.aws/config` directly to build its profile list. Two commands select a profile, and they list different profiles:
+
+| Command | Lists | Use it for |
+|---|---|---|
+| [`ck aws login`](/commands/aws/#ck-aws-login) | Profiles with `sso_account_id` (IAM Identity Center). After login it also offers profiles that use the chosen one as `source_profile`. | Day-to-day SSO login |
+| [`ck aws switch`](/commands/aws/#ck-aws-switch) | Every `[profile …]` and `[default]` section | Access keys, `credential_process`, roles, or any profile |
+
+Create a profile with `ck setup aws`, or write one by hand:
+
+<Tabs>
+<TabItem label="SSO (IAM Identity Center)">
+
+```ini title="~/.aws/config"
+[profile dev-admin]
+sso_session = my-sso
+sso_account_id = 111111111111
+sso_role_name = AdministratorAccess
+region = eu-west-1
+
+[sso-session my-sso]
+sso_start_url = https://my-org.awsapps.com/start
+sso_region = eu-west-1
+sso_registration_scopes = sso:account:access
+```
+
+Appears in `ck aws login` and `ck aws switch`. `aws configure sso` (option 1 of `ck setup aws`) writes this format.
+
+</TabItem>
+<TabItem label="Access keys">
+
+```ini title="~/.aws/config"
+[profile ci-user]
+region = us-east-1
+```
+
+```ini title="~/.aws/credentials"
+[ci-user]
+aws_access_key_id = <access-key-id>
+aws_secret_access_key = <secret-access-key>
+```
+
+Appears in `ck aws switch` only. The `[profile ci-user]` section in `~/.aws/config` is what makes it appear: profiles that exist only in `~/.aws/credentials` are not listed. `aws configure --profile` (option 2 of `ck setup aws`) writes both files.
+
+</TabItem>
+<TabItem label="Chained role">
+
+```ini title="~/.aws/config"
+[profile prod-deploy]
+role_arn = arn:aws:iam::222222222222:role/Deploy
+source_profile = dev-admin
+region = eu-west-1
+```
+
+After `ck aws login` into `dev-admin`, CloudKit offers `prod-deploy` automatically. It also appears in `ck aws switch`. Option 3 of `ck setup aws` writes this format.
+
+</TabItem>
+</Tabs>
+
+<Aside type="tip">
+Give every profile a `region`. CloudKit exports it as `AWS_REGION` and `AWS_DEFAULT_REGION`, and EC2 and ECS commands run against that region. See [Accounts, regions and projects](/concepts/targeting/).
+</Aside>
+
+## 2. Log in
+
+```bash
+ck aws login
+```
+
+<Steps>
+
+1. CloudKit shows a numbered table of SSO profiles (or selects the only one) and you type a number.
+2. It checks the cached credentials with `aws sts get-caller-identity`. If they are missing or expired, it runs `aws sso login --profile <profile>`, which opens your browser.
+3. If other profiles use the selected one as `source_profile`, it offers them (or selects the only one).
+4. It clears the screen and prints the session table, then prefixes your prompt with `[profile:region]`.
+
+</Steps>
+
+```text title="Example output (illustrative values)"
+━━━ AWS Session Information ━━━
+
+Info         Value
+────────────  ────────────────────────────────────────────────────────
+Account      1111-1111-1111
+Profile      dev-admin
+Region       eu-west-1
+Identity     SSO AdministratorAccess as jane@example.com
+Credentials  SSO · expires 2026-10-21 14:20 UTC (in 7h 12m)
+```
+
+For an access-key profile, use `ck aws switch` instead. It shows the same table, and the **Credentials** row reads `Static keys · no expiry`.
+
+## 3. Run a first workflow
+
+```bash
+ck ec2 ls-running                 # running instances: id, name, state (JSON)
+ck ec2 session                    # pick one and open a shell through SSM
+ck ecs clusters                   # ECS cluster names
+ck ecs services my-cluster        # services in one cluster
+```
+
+`ck ec2 session` needs the instance to be [managed by Systems Manager](/guides/connect-ec2/#prerequisites). Type `exit` to leave the shell.
+
+## 4. Check and end the session
+
+```bash
+ck status        # profile, account and region of this terminal; no network calls
+ck aws logout    # unset the AWS variables in this terminal and restore the prompt
+```
+
+`ck aws logout` does not revoke credentials or delete the SSO cache. Other terminals and later `aws` commands with `--profile` keep working until the credentials expire. To end the SSO session itself, run `aws sso logout`.
+
+## Next
+
+- [Connect to an EC2 instance](/guides/connect-ec2/)
+- [Inspect ECS services and run commands in containers](/guides/ecs/)
+- [Sessions and credentials](/sessions/) explains expiry warnings and chained profiles in detail.

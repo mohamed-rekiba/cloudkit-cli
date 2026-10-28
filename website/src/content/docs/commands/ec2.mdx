@@ -1,0 +1,220 @@
+---
+title: ck ec2
+description: Reference for ck ec2 commands that list, start and stop EC2 instances, open SSM shells and forward ports.
+sidebar:
+  order: 3
+tableOfContents:
+  maxHeadingLevel: 2
+---
+
+import { Aside } from '@astrojs/starlight/components';
+import CommandFacts from '../../../components/CommandFacts.astro';
+
+`ck ec2` works on EC2 instances in the terminal's AWS profile and region (`AWS_PROFILE`, `AWS_REGION`). Start a session with [`ck aws login`](/commands/aws/#ck-aws-login) first. There are no `--profile` or `--region` flags; see [Accounts, regions and projects](/concepts/targeting/#aws-profile-and-region-come-from-the-session) to target another region for one command.
+
+| Command | Purpose | Effect |
+|---|---|---|
+| [`ls`](#ck-ec2-ls) | List all instances | Read-only |
+| [`ls-running`](#ck-ec2-ls-running) | List running instances | Read-only |
+| [`ls-stopped`](#ck-ec2-ls-stopped) | List stopped instances | Read-only |
+| [`session`](#ck-ec2-session) | Open an SSM shell | Interactive |
+| [`run`](#ck-ec2-run) | Start an instance | Changes resources |
+| [`stop`](#ck-ec2-stop) | Stop an instance | Interrupts workloads |
+| [`port-forward`](#ck-ec2-port-forward) | Forward a local port through SSM | Interactive |
+
+<Aside type="note" title="Systems Manager prerequisites">
+`session` and `port-forward` connect through AWS Systems Manager (SSM) Session Manager instead of SSH. The instance needs a running SSM Agent, an instance profile with the `AmazonSSMManagedInstanceCore` policy (or equivalent), and outbound HTTPS to the SSM endpoints. Your machine needs the [Session Manager plugin](https://docs.aws.amazon.com/systems-manager/latest/userguide/session-manager-working-with-install-plugin.html). See [Connect to an EC2 instance](/guides/connect-ec2/#prerequisites) and [Permissions](/reference/permissions/#ec2).
+</Aside>
+
+## ck ec2 ls
+
+List every instance in the region with its ID, `Name` tag and state.
+
+<CommandFacts effect="read" runs="aws ec2 describe-instances" needs="AWS session, aws, jq; ec2:DescribeInstances" />
+
+```text
+ck ec2 ls
+```
+
+Takes no arguments. Output is a JSON array, in the order the EC2 API returns instances. `name` is `null` for instances without a `Name` tag. Terminated instances are included for as long as EC2 still returns them.
+
+```json title="Output (illustrative)"
+[
+  {
+    "id": "i-0123456789abcdef0",
+    "name": "web-1",
+    "state": "running"
+  },
+  {
+    "id": "i-0fedcba9876543210",
+    "name": null,
+    "state": "stopped"
+  }
+]
+```
+
+To filter or reshape the JSON, pipe it to `jq`, for example `ck ec2 ls | jq -r '.[] | select(.name == "web-1") | .id'`.
+
+## ck ec2 ls-running
+
+List instances in the `running` state. Same output as [`ls`](#ck-ec2-ls).
+
+<CommandFacts effect="read" runs="aws ec2 describe-instances --filters Name=instance-state-name,Values=running" needs="AWS session, aws, jq; ec2:DescribeInstances" />
+
+```text
+ck ec2 ls-running
+```
+
+## ck ec2 ls-stopped
+
+List instances in the `stopped` state. Same output as [`ls`](#ck-ec2-ls). Instances that are `stopping`, `pending` or `shutting-down` appear in neither `ls-running` nor `ls-stopped`.
+
+<CommandFacts effect="read" runs="aws ec2 describe-instances --filters Name=instance-state-name,Values=stopped" needs="AWS session, aws, jq; ec2:DescribeInstances" />
+
+```text
+ck ec2 ls-stopped
+```
+
+## ck ec2 session
+
+Open an interactive shell on an instance through SSM Session Manager. No SSH key, open port 22 or public IP is needed.
+
+<CommandFacts
+	effect="session"
+	runs={['aws ec2 describe-instances (picker)', 'aws ssm start-session --target <instance-id>']}
+	needs="AWS session, aws, Session Manager plugin, SSM-managed instance; ssm:StartSession"
+/>
+
+```text
+ck ec2 session [instance-id]
+```
+
+| Argument | Description |
+|---|---|
+| `instance-id` | Optional. The instance to connect to. When omitted, CloudKit lists running instances and asks you to pick one. |
+| `-h`, `--help` | Print usage and return. |
+
+### Instance picker
+
+Without an instance ID, CloudKit lists running instances with their ID, `Name` tag (`-` if none), availability zone and private IP. With exactly one running instance it connects without asking; with none it prints `No running instances found.` and returns `1`.
+
+```text title="Picker (illustrative)"
+Running EC2 instances:
+
+#    Instance ID          Name    AZ          Private IP
+───  ───────────────────  ──────  ──────────  ──────────
+[1]  i-0123456789abcdef0  web-1   eu-west-1a  10.0.1.12
+[2]  i-0fedcba9876543210  worker  eu-west-1b  10.0.2.40
+
+Select an instance [1-2]:
+```
+
+The picker lists all running instances in the region, including ones that are not SSM-managed; connecting to those fails with an SSM error.
+
+### Examples
+
+```bash
+ck ec2 session                          # pick from running instances
+ck ec2 session i-0123456789abcdef0      # connect directly
+```
+
+The shell is the SSM default: usually `sh` as `ssm-user`. Type `exit` to end the session.
+
+**Related:** [Connect to an EC2 instance](/guides/connect-ec2/), [SSM session fails](/troubleshooting/#ssm-session-fails-to-start)
+
+## ck ec2 run
+
+Start a stopped instance. ("Run" here means start an existing instance; it does not launch a new one.)
+
+<CommandFacts effect="change" runs="aws ec2 start-instances --instance-ids <instance-id>" needs="AWS session, aws; ec2:StartInstances" />
+
+```text
+ck ec2 run <instance-id>
+```
+
+| Argument | Description |
+|---|---|
+| `instance-id` | Required. The instance to start. |
+
+```bash
+ck ec2 run i-0123456789abcdef0
+```
+
+```text title="Output (illustrative)"
+Starting instance i-0123456789abcdef0...
+-------------------------------------------------------------
+|                      StartInstances                        |
++---------------+------------------------+------------------+
+| CurrentState  |      InstanceId        |  PreviousState   |
++---------------+------------------------+------------------+
+|  pending      |  i-0123456789abcdef0   |  stopped         |
++---------------+------------------------+------------------+
+```
+
+The command returns as soon as EC2 accepts the request. A running instance starts incurring compute charges. Wait for `ck ec2 ls-running` to list it before connecting.
+
+## ck ec2 stop
+
+Stop a running instance.
+
+<CommandFacts effect="disrupt" runs="aws ec2 stop-instances --instance-ids <instance-id>" needs="AWS session, aws; ec2:StopInstances" />
+
+```text
+ck ec2 stop <instance-id>
+```
+
+| Argument | Description |
+|---|---|
+| `instance-id` | Required. The instance to stop. |
+
+```bash
+ck ec2 stop i-0123456789abcdef0
+```
+
+Prints `Stopping instance <id>...` and a table with the previous and current state, like [`run`](#ck-ec2-run).
+
+<Aside type="danger" title="No confirmation">
+The instance stops immediately, ending everything running on it, even in production. Data on instance store volumes is lost; EBS volumes are kept. The public IPv4 address changes on the next start unless it is an Elastic IP. Instances in an Auto Scaling group may be replaced.
+</Aside>
+
+## ck ec2 port-forward
+
+Forward a port on your machine to a port on the instance, or to another host the instance can reach, such as a private RDS database.
+
+<CommandFacts
+	effect="session"
+	runs={['aws ssm start-session --document-name AWS-StartPortForwardingSession', 'aws ssm start-session --document-name AWS-StartPortForwardingSessionToRemoteHost']}
+	needs="AWS session, aws, Session Manager plugin, SSM-managed instance; ssm:StartSession on the instance and the document"
+/>
+
+```text
+ck ec2 port-forward <remote-port> <local-port> <instance-id> [host]
+```
+
+| Argument | Description |
+|---|---|
+| `remote-port` | Required. Port on the instance, or on `host` when given. |
+| `local-port` | Required. Port to listen on at `localhost`. |
+| `instance-id` | Required. The instance to tunnel through. There is no picker. |
+| `host` | Optional. A host name or IP that the **instance** can reach. Without it, traffic goes to the instance itself. |
+
+```text title="How traffic flows"
+Without host:  localhost:<local-port> ──SSM──▶ instance:<remote-port>
+With host:     localhost:<local-port> ──SSM──▶ instance ──▶ host:<remote-port>
+```
+
+### Examples
+
+```bash
+# A web server on the instance at http://localhost:8080
+ck ec2 port-forward 80 8080 i-0123456789abcdef0
+
+# A private PostgreSQL database at localhost:5433, through the instance
+ck ec2 port-forward 5432 5433 i-0123456789abcdef0 mydb.example.internal
+```
+
+CloudKit prints the mapping, for example `Forwarding localhost:5433 -> mydb.example.internal:5432 (via EC2 instance)`, then the Session Manager plugin prints `Waiting for connections...`. The tunnel stays open until you press `Ctrl+C`.
+
+The listener binds to `localhost` only. If the local port is already in use, the plugin fails to start the listener; pick another `local-port`.
+
+**Related:** [Forward a port and reach a private database](/guides/port-forwarding/), [Port-forwarding problems](/troubleshooting/#port-forward-fails-or-the-local-port-is-busy)

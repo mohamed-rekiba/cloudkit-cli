@@ -1,9 +1,6 @@
 # shellcheck shell=bash
-SERVICES_DIR=$(dirname "$0")
-export SERVICES_DIR
-
 # GCE Managed Instance Groups (MIG) helper
-gce-ig() {
+_ck_mig() {
   case "$1" in
     list)
       if [[ "$2" == "--region" && -n "$3" ]]; then
@@ -15,8 +12,8 @@ gce-ig() {
 
     describe)
       if [[ $# -lt 2 ]]; then
-        echo "Usage: gce-ig describe <group-name> --region <region>"
-        echo "Example: gce-ig describe laravel-production-mig --region us-central1"
+        echo "Usage: ck mig describe <group-name> --region <region>"
+        echo "Example: ck mig describe laravel-production-mig --region us-central1"
         return 1
       fi
 
@@ -40,8 +37,8 @@ gce-ig() {
 
     recreate)
       if [[ $# -lt 2 ]]; then
-        echo "Usage: gce-ig recreate <group-name> --region <region>"
-        echo "Example: gce-ig recreate laravel-production-mig --region us-central1"
+        echo "Usage: ck mig recreate <group-name> --region <region>"
+        echo "Example: ck mig recreate laravel-production-mig --region us-central1"
         return 1
       fi
 
@@ -65,8 +62,8 @@ gce-ig() {
 
     restart)
       if [[ $# -lt 2 ]]; then
-        echo "Usage: gce-ig restart <group-name> --region <region>"
-        echo "Example: gce-ig restart laravel-production-mig --region us-central1"
+        echo "Usage: ck mig restart <group-name> --region <region>"
+        echo "Example: ck mig restart laravel-production-mig --region us-central1"
         return 1
       fi
 
@@ -90,7 +87,7 @@ gce-ig() {
 
     *)
       cat << 'EOF'
-Usage: gce-ig <command> [options]
+Usage: ck mig <command> [options]
 
 Commands:
   list [--region <region>]
@@ -103,11 +100,11 @@ Commands:
                           Restart instances in a managed instance group
 
 Examples:
-  gce-ig ls
-  gce-ig ls --region us-central1
-  gce-ig describe laravel-production-mig --region us-central1
-  gce-ig recreate laravel-production-mig --region us-central1
-  gce-ig restart laravel-production-mig --region us-central1
+  ck mig list
+  ck mig list --region us-central1
+  ck mig describe laravel-production-mig --region us-central1
+  ck mig recreate laravel-production-mig --region us-central1
+  ck mig restart laravel-production-mig --region us-central1
 EOF
       return 1
       ;;

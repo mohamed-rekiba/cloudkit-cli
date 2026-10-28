@@ -1,0 +1,8 @@
+# Keep development-only files out of release tarballs, which install.sh
+# downloads into ~/.cloudkit. Users get only what `ck` needs at runtime.
+# docker/run.sh applies the same rules to its local test release.
+/website export-ignore
+/docker export-ignore
+/test export-ignore
+/scripts export-ignore
+/.github export-ignore

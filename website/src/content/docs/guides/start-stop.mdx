@@ -1,0 +1,116 @@
+---
+title: Start and stop instances
+description: Start, stop and reset EC2 instances and Compute Engine VMs with CloudKit, and roll managed instance groups safely.
+---
+
+import { Aside, Steps, Tabs, TabItem } from '@astrojs/starlight/components';
+
+Stopping development machines outside working hours is a common way to save cost. CloudKit makes it a short command, which also makes it easy to stop the wrong machine, so this guide starts with checking the target.
+
+<Aside type="danger" title="These commands act immediately">
+`ck ec2 stop`, `ck gce stop`, `ck gce reset`, `ck mig restart` and `ck mig recreate` do not ask for confirmation, even in production. Check the prompt and `ck status` first.
+</Aside>
+
+## Prerequisites
+
+| Cloud | Permissions |
+|---|---|
+| AWS | `ec2:DescribeInstances`, `ec2:StartInstances`, `ec2:StopInstances`. Instances with encrypted EBS volumes also need KMS permissions on the key. |
+| Google Cloud | `compute.instances.list`, `compute.instances.start`, `compute.instances.stop` (and `reset`), for example via `roles/compute.instanceAdmin.v1` |
+
+## Steps
+
+<Tabs syncKey="cloud">
+<TabItem label="AWS EC2">
+
+<Steps>
+
+1. Confirm the session and find the instance ID:
+
+   ```bash
+   ck status
+   ck ec2 ls-running
+   ```
+
+2. Stop it:
+
+   ```bash
+   ck ec2 stop i-0123456789abcdef0
+   ```
+
+   The output shows `PreviousState: running` and `CurrentState: stopping`.
+
+3. Later, start it again:
+
+   ```bash
+   ck ec2 run i-0123456789abcdef0
+   ```
+
+   The output shows `CurrentState: pending`. Wait until `ck ec2 ls-running` lists it, then connect with `ck ec2 session`.
+
+</Steps>
+
+</TabItem>
+<TabItem label="Compute Engine">
+
+<Steps>
+
+1. Confirm the session and find the VM:
+
+   ```bash
+   ck status
+   ck gce ls-running
+   ```
+
+2. Stop it:
+
+   ```bash
+   ck gce stop my-vm
+   ```
+
+   gcloud waits until the operation completes.
+
+3. Later, start it again:
+
+   ```bash
+   ck gce start my-vm
+   ```
+
+</Steps>
+
+</TabItem>
+</Tabs>
+
+## What changes when an instance stops
+
+| | EC2 | Compute Engine |
+|---|---|---|
+| Disks | EBS volumes kept; instance store data lost | Persistent disks kept; local SSD data lost unless preserved |
+| Public IP | Changes unless it is an Elastic IP | Ephemeral external IP released |
+| Private IP | Kept | Kept |
+| Billing | Compute stops; storage and Elastic IPs continue | Compute stops; disks and reserved IPs continue |
+
+## Reset a hung VM
+
+```bash
+ck gce reset my-vm
+```
+
+`reset` is a hard reset with no clean shutdown. Use it only when the VM no longer responds. EC2 has no `ck` equivalent; use `aws ec2 reboot-instances`.
+
+## Instances managed by a group
+
+Do not stop VMs in a managed instance group or EC2 Auto Scaling group individually: the group may treat them as unhealthy and replace them. For regional Compute Engine MIGs, use a rolling action instead:
+
+```bash
+ck mig describe web-mig --region us-central1     # check the template and stability first
+ck mig restart web-mig --region us-central1      # restart VMs a few at a time
+ck mig recreate web-mig --region us-central1     # or replace them from the current template
+```
+
+See [`ck mig`](/commands/mig/) for what each action does.
+
+## Troubleshooting
+
+- `UnauthorizedOperation` or `Required 'compute.instances.stop' permission`: your identity lacks the permission. See [Missing cloud permissions](/troubleshooting/#access-denied-or-permission-denied).
+- `IncorrectInstanceState`: the instance is already stopping or starting. Wait and check with `ck ec2 ls`.

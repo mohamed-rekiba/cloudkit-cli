@@ -1,0 +1,78 @@
+---
+title: How CloudKit works
+description: What CloudKit loads into your shell, which native AWS CLI and gcloud commands each ck command runs, and where its permission boundaries are.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+CloudKit is not a separate program or a service. It is a set of shell functions that your shell loads at start-up, and every cloud operation it performs is an ordinary `aws` or `gcloud` command run with your credentials.
+
+## Loaded into your shell
+
+Your rc file sources `main.sh`, which loads the rest of CloudKit into the current bash or zsh process:
+
+```text
+~/.zshrc ──source──▶ main.sh ──source──▶ session.sh          sessions, prompt, session tables
+                                       ├▶ services/_picker.sh  numbered instance picker
+                                       ├▶ services/ec2.sh      ck ec2
+                                       ├▶ services/ecs.sh      ck ecs
+                                       ├▶ services/gce.sh      ck gce
+                                       ├▶ services/gce_ig.sh   ck mig
+                                       ├▶ services/setup.sh    ck setup, ck doctor
+                                       └▶ ck.sh                the ck dispatcher, status, help
+```
+
+Because `ck` is a function running inside your shell rather than a child process, it can do what a normal program cannot: export `AWS_PROFILE` and related variables into the terminal you are using, and change your prompt. That is how [per-terminal sessions](/sessions/) work.
+
+Loading CloudKit has two side effects even before you run a command:
+
+- It sets `CLOUDKIT_DIR`, plus color variables (`RED`, `GREEN`, `BLUE`, `CYAN`, `GRAY`, `YELLOW`, `BOLD`, `BOLD_GREEN`, `NC`, `PROD_BADGE`) and helper functions such as `select_profile` and `clear_terminal`. If your own rc file defines variables or functions with these names, the one defined last wins. See [Shell start-up conflicts](/troubleshooting/#shell-start-up-or-prompt-conflicts).
+- Unless `CLOUDKIT_GCLOUD_GLOBAL` is set or the shell already has `CLOUDSDK_ACTIVE_CONFIG_NAME`, it exports an empty `CLOUDSDK_CORE_ACCOUNT` so the terminal starts with no gcloud account. See [Sessions and credentials](/sessions/#google-cloud-sessions).
+
+## What each command runs
+
+CloudKit builds the native command for you and runs it in the foreground, so you see the native CLI's output, prompts and errors. This table is the complete mapping.
+
+| `ck` command | Native commands |
+|---|---|
+| `ck aws login`, `ck aws switch` | `aws sts get-caller-identity`, `aws configure export-credentials`, and `aws sso login` when needed |
+| `ck aws sso <profile>` | `aws sso login --profile <profile>` |
+| `ck gcloud login`, `ck gcloud switch` | `gcloud config configurations list`, `gcloud auth describe`; `login` also runs `gcloud auth print-access-token` and, when needed, `gcloud auth login` |
+| `ck ec2 ls`, `ls-running`, `ls-stopped` | `aws ec2 describe-instances` |
+| `ck ec2 session` | `aws ec2 describe-instances` (picker only), `aws ssm start-session` |
+| `ck ec2 run`, `ck ec2 stop` | `aws ec2 start-instances`, `aws ec2 stop-instances` |
+| `ck ec2 port-forward` | `aws ssm start-session` with the `AWS-StartPortForwardingSession` or `AWS-StartPortForwardingSessionToRemoteHost` document |
+| `ck ecs clusters`, `services` | `aws ecs list-clusters`, `aws ecs list-services` |
+| `ck ecs tasks`, `service-tasks` | `aws ecs list-tasks`, `aws ecs describe-tasks` |
+| `ck ecs task-info` | `aws ecs describe-tasks` |
+| `ck ecs logs` | `aws ecs describe-tasks`, `aws ecs describe-task-definition`, `aws logs get-log-events` |
+| `ck ecs exec`, `exec-running` | `aws ecs execute-command` (`exec-running` first runs `aws ecs list-tasks`) |
+| `ck ecs stop`, `describe` | `aws ecs stop-task`, `aws ecs describe-services` |
+| `ck gce ls`, `ls-running`, `ls-stopped` | `gcloud compute instances list` |
+| `ck gce start`, `stop`, `reset` | `gcloud compute instances start`, `stop`, `reset` |
+| `ck gce ssh`, `scp` | `gcloud compute ssh`, `gcloud compute scp` |
+| `ck gce port-forward` | `gcloud compute start-iap-tunnel`, or `gcloud compute ssh --tunnel-through-iap -- -N -L …` with a host |
+| `ck mig list`, `describe` | `gcloud compute instance-groups managed list`, `describe` |
+| `ck mig recreate`, `restart` | `gcloud compute instance-groups managed rolling-action replace`, `restart` |
+| `ck setup aws` | `aws configure sso`, `aws configure`, or `aws configure set` |
+| `ck setup gcloud` | `gcloud config configurations create`, `gcloud config set`, `gcloud auth login`, optionally `gcloud auth application-default login` |
+| `ck doctor`, `status`, `version`, `help` | Local checks only (`ck doctor` also runs `aws configure list-profiles` and version commands) |
+
+`ck gce` commands that take an instance name also run `gcloud compute instances list` to find the zone when you leave out `--zone`. See [Accounts, regions and projects](/concepts/targeting/).
+
+## What CloudKit does not do
+
+- **It stores no credentials.** Tokens and keys stay where the AWS CLI and gcloud keep them (`~/.aws/sso/cache`, `~/.aws/credentials`, `~/.config/gcloud`). When CloudKit inspects credentials it extracts only the expiry time and type; token values are never printed.
+- **It grants no permissions.** Every command runs as the identity of your current profile or gcloud account. If that identity lacks an IAM permission, the native CLI returns its usual `AccessDenied` or `PERMISSION_DENIED` error. See [Permissions](/reference/permissions/).
+- **It does not ask for confirmation** before commands that change resources, such as `ck ec2 stop`, `ck gce reset` or `ck mig recreate`, even in production. The command runs as soon as you press Enter.
+- **It has no configuration file.** Behavior is controlled by a few [environment variables](/configuration/).
+
+## Output and exit status
+
+- Most commands print the native CLI's output, sometimes reshaped with `--query` or `jq` into a smaller table or JSON document. Each command reference shows the shape.
+- Errors from `aws` or `gcloud` (authentication, IAM, networking) are printed unchanged. If an error message starts with `An error occurred (…)` or `ERROR: (gcloud…)`, it came from the native CLI, not from CloudKit.
+- Missing required arguments print a usage line and return status `1`. Running a command family with no subcommand (for example `ck ecs`) prints its help and returns `1`.
+
+<Aside type="note">
+CloudKit's own messages are short and specific, for example `Error: jq is required…`, `No running instances found.`, `Error: --region is required`, or `Error: instance 'my-vm' exists in multiple zones`. The [troubleshooting](/troubleshooting/) page lists them.
+</Aside>

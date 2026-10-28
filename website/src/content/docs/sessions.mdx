@@ -1,0 +1,149 @@
+---
+title: Sessions and credentials
+description: How CloudKit keeps one AWS profile and one gcloud configuration per terminal, which variables it sets, and how it checks and warns about credential expiry.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+A **session** in CloudKit is the AWS profile and the gcloud configuration selected in one terminal. Sessions are plain environment variables, so they belong to a single shell: switching to production in one window never affects another.
+
+## The per-terminal model
+
+```text
+Terminal A                         Terminal B                     Terminal C (new)
+AWS_PROFILE=dev-admin              AWS_PROFILE=prod-admin         (no AWS profile)
+CLOUDSDK_ACTIVE_CONFIG_NAME=dev    (no gcloud account)            (no gcloud account)
+[dev-admin:eu-west-1] [gcloud:…]   [PROD] [prod-admin:eu-west-1]  $
+```
+
+- **Commands, scripts and subshells** started from a terminal inherit its session, because they inherit its environment.
+- **Other terminals** are unaffected, and **new terminals** start without a session.
+- CloudKit never rewrites `~/.aws/config` or activates a gcloud configuration globally while you log in or switch. Only [`ck setup`](/commands/setup/) writes configuration.
+
+## AWS sessions
+
+### What gets set
+
+`ck aws login` and `ck aws switch` export:
+
+| Variable | Value |
+|---|---|
+| `AWS_PROFILE`, `AWS_DEFAULT_PROFILE` | The selected profile name |
+| `AWS_REGION`, `AWS_DEFAULT_REGION` | The profile's `region` from `~/.aws/config` |
+| `AWS_ACCOUNT_ID` | The account ID from `sso_account_id`, or from `aws sts get-caller-identity` |
+
+The AWS CLI and SDKs read `AWS_PROFILE` and `AWS_REGION`, so every `aws` command, `ck ec2`/`ck ecs` command, and tool such as Terraform in that terminal uses the session. `ck aws logout` unsets all five variables.
+
+<Aside type="caution" title="Selection happens before validation">
+The variables are exported as soon as you pick a profile. If authentication then fails, the terminal is left pointing at the failed profile. Run `ck aws logout` or pick again.
+</Aside>
+
+### Which profiles are offered
+
+| Command | Profiles listed |
+|---|---|
+| `ck aws login` | Sections in `~/.aws/config` that contain `sso_account_id` |
+| `ck aws switch` | Every `[profile …]` section and `[default]` |
+| After `ck aws login` | Profiles whose `source_profile` is the profile you just logged in with (chained roles) |
+
+With exactly one candidate, CloudKit selects it without asking. Profiles that exist only in `~/.aws/credentials` are never listed; add a `[profile name]` section with a `region` to `~/.aws/config`.
+
+### Login and credential checks
+
+When you select a profile, CloudKit runs `aws sts get-caller-identity` and `aws configure export-credentials` in parallel:
+
+- `ck aws login` runs `aws sso login --profile <profile>` when the identity call fails or the credentials' expiry time is in the past. Otherwise it prints `Credentials are valid and not expired` and skips the browser.
+- `ck aws switch` runs `aws sso login` only for SSO profiles whose identity call fails. For other profile types it prints `Failed to authenticate with profile: <name>` and stops.
+
+### Chained profiles
+
+A chained profile assumes an IAM role using another profile's credentials:
+
+```ini title="~/.aws/config"
+[profile prod-deploy]
+role_arn = arn:aws:iam::222222222222:role/Deploy
+source_profile = dev-admin
+region = eu-west-1
+```
+
+After `ck aws login` authenticates `dev-admin`, CloudKit finds every profile with `source_profile = dev-admin`. One is selected automatically; several are shown in a table with their region and role ARN. An invalid choice keeps `dev-admin`. If assuming the role fails, CloudKit prints `Falling back to base profile: dev-admin` and keeps the base session. The chained profile's `region`, when set, replaces the base region.
+
+### The session table
+
+| Row | Meaning |
+|---|---|
+| Account | 12-digit account ID formatted as `1111-1111-1111` |
+| Profile | The active profile |
+| Region | `AWS_REGION` for this terminal |
+| Identity | `SSO <permission set> as <user>`, `Role <role> as <session>`, `IAM user <name>`, `Federated user …`, or `Root user` (shown in red) |
+| Credentials | Credential type and expiry, for example `SSO · expires 2026-10-21 14:20 UTC (in 7h 12m)` or `Static keys · no expiry` |
+
+The credential type comes from the profile section: `SSO` (`sso_account_id` or `sso_start_url`), `Static keys` (`aws_access_key_id`), or `credential_process`. For other profiles it is inferred from the identity: `Assumed role`, `Static keys`, `Session token` or `Other`.
+
+### Expiry warnings
+
+After the table, CloudKit compares the credential expiry with the current time:
+
+| Time left | Message |
+|---|---|
+| 15 minutes or less | `⚠  warning: AWS credentials expire in N minute(s).` |
+| 5 minutes or less | `⚠ CRITICAL: AWS credentials expire in N minute(s)! Re-authenticate immediately.` |
+| No expiry (static keys) | Nothing |
+
+CloudKit checks only when you log in or switch. It does not refresh credentials in the background; when they expire, `aws` commands fail and you run `ck aws login` again.
+
+## Google Cloud sessions
+
+### What gets set
+
+`ck gcloud login` and `ck gcloud switch` export:
+
+| Variable | Value |
+|---|---|
+| `CLOUDSDK_ACTIVE_CONFIG_NAME` | The selected configuration. gcloud reads this before the global active configuration. |
+| `GCLOUD_ACTIVE_CONFIG`, `GCLOUD_ACCOUNT`, `GCLOUD_PROJECT`, `GCLOUD_REGION` | Values for CloudKit's prompt, table and `ck status` |
+
+They also unset `CLOUDSDK_CORE_ACCOUNT` (see below). `gcloud config configurations activate` is never run, so other terminals keep gcloud's global default.
+
+### New terminals start with no account
+
+When CloudKit loads in a new shell, it exports `CLOUDSDK_CORE_ACCOUNT=""`. An empty account overrides the active configuration's account, so gcloud reports `You do not currently have an active account selected` until you run `ck gcloud login` or `ck gcloud switch`. This mirrors a terminal without `AWS_PROFILE`.
+
+Exceptions:
+
+- `CLOUDKIT_GCLOUD_GLOBAL=1` keeps gcloud's global active configuration in new terminals.
+- A shell that already has `CLOUDSDK_ACTIVE_CONFIG_NAME` (for example, a subshell of a terminal with a session) keeps it.
+
+`ck gcloud logout` unsets the `GCLOUD_*` variables and `CLOUDSDK_ACTIVE_CONFIG_NAME`, and returns the terminal to "no account" (or to the global configuration with `CLOUDKIT_GCLOUD_GLOBAL=1`).
+
+### Login and token checks
+
+- `ck gcloud login` runs `gcloud auth print-access-token`. If it fails, or you pass `--reauth`, CloudKit runs `gcloud auth login`.
+- `ck gcloud switch` does not log in; it selects the configuration and shows the table.
+
+The **Token Expiry** row comes from `gcloud auth describe`. gcloud renews access tokens silently when it holds a refresh token or service account key, shown as `(auto-refresh)`. Only credentials that cannot refresh, shown as `(no refresh)`, get warnings: at 15 minutes, at 5 minutes, and `⚠ CRITICAL: GCloud credentials have expired and cannot refresh. Run ck gcloud login --reauth.` once expired.
+
+## Checking the current session
+
+```bash
+ck status
+```
+
+`ck status` prints the session from the environment variables above. It makes no network calls, so it is instant, but it cannot tell whether the credentials still work. To test them, run `aws sts get-caller-identity` or `gcloud auth print-access-token`.
+
+When no gcloud session is started but `CLOUDKIT_GCLOUD_GLOBAL=1` is set, `ck status` shows gcloud's global configuration with the note `gcloud's active config; not started in this shell`.
+
+## Logging out
+
+| Command | Effect | Does not |
+|---|---|---|
+| `ck aws logout` | Unsets the AWS variables and restores the prompt | Delete the SSO cache or `~/.aws` files. Use `aws sso logout` to end the SSO session. |
+| `ck gcloud logout` | Unsets the gcloud variables and returns to "no account" | Revoke credentials. Use `gcloud auth revoke`. |
+
+Both affect only the current terminal.
+
+## Related
+
+- [`ck aws`](/commands/aws/) and [`ck gcloud`](/commands/gcloud/) command reference
+- [Prompt and production safety](/concepts/prompt-and-production/)
+- [Switch between environments](/guides/environments/)

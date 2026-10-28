@@ -1,0 +1,161 @@
+---
+title: Installation
+description: Install, upgrade and uninstall CloudKit, with every installer option, the dependencies it manages, and the files it changes.
+---
+
+import { Aside, FileTree, Steps, Tabs, TabItem } from '@astrojs/starlight/components';
+
+CloudKit is a directory of shell scripts plus one line in your shell's rc file that loads them. The installer automates both, and can also install the cloud CLIs CloudKit depends on.
+
+## Install with the installer
+
+```bash
+curl -fsSL https://github.com/shabayekdes/cloudkit-cli/releases/latest/download/install.sh | bash
+```
+
+The installer runs these steps in order:
+
+<Steps>
+
+1. **Asks which clouds you use**: AWS and Google Cloud, AWS only, Google Cloud only, or CloudKit only (common tools, no cloud CLIs). Without a terminal to ask on (for example in CI), it installs dependencies for both clouds.
+2. **Checks dependencies** for that choice and, after one confirmation, installs the missing ones with `brew`, `apt`, `dnf`, `yum` or `pacman`. See [Dependencies](#dependencies).
+3. **Downloads the latest release** into `~/.cloudkit` (or `$CLOUDKIT_HOME`, or `--dir`). It uses `git clone` when `git` is available and a release tarball otherwise. If the directory is already an installer-managed CloudKit, it is switched to the latest release.
+4. **Adds a marked block to your rc files** that sources CloudKit. Re-running replaces the block instead of adding a second one.
+5. **Offers credential setup** (`ck setup aws` / `ck setup gcloud`) when the matching CLI is installed. The default answer is **no** when you already have `~/.aws/config` or gcloud configurations.
+6. **Offers to start a new login shell** so `ck` works in the current terminal.
+
+</Steps>
+
+### Installer options
+
+Pass options after `bash -s --` when piping from `curl`:
+
+```bash
+curl -fsSL https://github.com/shabayekdes/cloudkit-cli/releases/latest/download/install.sh | bash -s -- --aws --yes
+```
+
+| Option | Effect |
+|---|---|
+| `--aws` | Install AWS dependencies (plus common tools). Skips the cloud question. |
+| `--gcp`, `--gcloud` | Install Google Cloud dependencies (plus common tools). Combine with `--aws` for both. |
+| `--all` | Install AWS and Google Cloud dependencies. |
+| `--core` | Install only the common tools (`curl`, `jq`, `python3`). |
+| `--yes`, `-y` | Answer yes to every question. Also skips credential setup and the new-shell prompt. |
+| `--no-deps` | Don't check or install dependencies. |
+| `--no-rc` | Don't edit shell rc files. You then [load CloudKit yourself](#manual-installation). |
+| `--no-setup` | Don't offer `ck setup` at the end. |
+| `--dir <path>` | Install directory. Default: `$CLOUDKIT_HOME`, else `~/.cloudkit`. Ignored when the installer runs from a clone. |
+| `--deps <tools>` | Install only the comma-separated tools (for example `jq,python3`) and exit. |
+| `--uninstall` | Remove CloudKit. See [Uninstall](#uninstall). |
+| `-h`, `--help` | Show the options. |
+
+<Aside type="caution" title="Review before piping to bash">
+Piping a script from the internet into `bash` runs it with your permissions, and it may call `sudo` to install packages. To review it first, download it, read it, then run it: `curl -fsSLO https://github.com/shabayekdes/cloudkit-cli/releases/latest/download/install.sh && less install.sh && bash install.sh`.
+</Aside>
+
+## Dependencies
+
+| Tool | Required for | Installed by the installer |
+|---|---|---|
+| `jq` | Every session command and several service commands | Always (common) |
+| `python3` | Parsing credential expiry times. `ck doctor` reports it as required. | Always (common) |
+| `curl` | The installer itself | Always (common) |
+| [AWS CLI **v2**](https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html) | All `ck aws`, `ck ec2` and `ck ecs` commands. Version 1 is not supported. | With `--aws` / `--all` |
+| `unzip` | Installing the AWS CLI on Linux | With `--aws` / `--all` |
+| [Session Manager plugin](https://docs.aws.amazon.com/systems-manager/latest/userguide/session-manager-working-with-install-plugin.html) | `ck ec2 session`, `port-forward`; `ck ecs exec`, `exec-running` | With `--aws` / `--all` (`brew`, `apt`, `dnf`, `yum` only) |
+| [Google Cloud CLI](https://cloud.google.com/sdk/docs/install) (`gcloud`) | All `ck gcloud`, `ck gce` and `ck mig` commands | With `--gcp` / `--all` |
+| `column`, `awk`, `sed`, `grep` | Tables and parsing | Preinstalled on macOS and most Linux distributions |
+
+How the installer gets each tool:
+
+- **AWS CLI v2**: `brew install awscli` on macOS; on Linux, the official zip for `x86_64` or `aarch64`. If AWS CLI v1 is present, v2 is installed alongside it.
+- **Session Manager plugin**: Homebrew cask on macOS; the official `.deb` or `.rpm` on Linux. On `pacman`-based systems install it manually.
+- **gcloud**: Homebrew cask on macOS; Google's apt repository on Debian/Ubuntu; otherwise Google's archive installer into `~/google-cloud-sdk`, which the rc block adds to `PATH`.
+
+If no supported package manager is found, the installer lists the missing tools and continues; install them yourself and run `ck doctor`.
+
+## What the installer changes
+
+<FileTree>
+- ~/.cloudkit/ CloudKit itself (or `$CLOUDKIT_HOME`, or `--dir`)
+  - main.sh entry point sourced by your shell
+  - .cloudkit-managed marks a directory the installer created
+  - .cloudkit-version the installed release tag, shown by `ck version`
+- ~/.zshrc and/or ~/.bashrc (~/.bash_profile for bash on macOS) gets the rc block below
+- ~/google-cloud-sdk/ only when gcloud is installed with Google's archive installer
+</FileTree>
+
+The rc block is delimited by markers so it can be replaced or removed cleanly:
+
+```bash title="~/.zshrc"
+# >>> cloudkit >>>
+source "/home/you/.cloudkit/main.sh"
+# <<< cloudkit <<<
+```
+
+The installer writes it to the rc file for your login shell (`$SHELL`) and also to `~/.zshrc` and `~/.bashrc` if they exist. It never edits `~/.aws` or gcloud configuration; `ck setup` does that only when you run it.
+
+## Install from a clone
+
+```bash
+git clone https://github.com/shabayekdes/cloudkit-cli.git
+cd cloudkit-cli
+./install.sh
+```
+
+When run from a clone, the installer uses the clone in place: it installs dependencies and points the rc block at the clone, but downloads nothing. `git pull` or `git checkout <tag>` then controls the version. This is the setup to use when [contributing](/contributing/).
+
+## Manual installation
+
+Install the [dependencies](#dependencies) yourself, put CloudKit anywhere, and source `main.sh` from your rc file:
+
+```bash title="~/.zshrc or ~/.bashrc"
+source /path/to/cloudkit-cli/main.sh
+```
+
+`ck doctor` recognizes the rc file when the line mentions `main.sh` and the path contains `cloudkit` or `aws-cli-helpers`.
+
+<Aside type="note" title="Sourced, not executed">
+`main.sh` must be **sourced**. CloudKit changes environment variables such as `AWS_PROFILE` and your prompt, which only works for functions running inside your shell. Running `bash main.sh` would load the functions into a child process that exits immediately.
+</Aside>
+
+## Upgrade
+
+Re-run the install command from the top of this page. It switches `~/.cloudkit` to the newest release and keeps your rc block, AWS profiles and gcloud configurations:
+
+```bash
+curl -fsSL https://github.com/shabayekdes/cloudkit-cli/releases/latest/download/install.sh | bash
+```
+
+The installer asks the same questions as a first install; dependencies that are already present are reported as `✓` and left alone. Add `--no-deps --no-setup` to skip those steps. Open a new terminal (or `exec zsh` / `exec bash`) and confirm the version with `ck version`.
+
+<Aside type="caution">
+Running `~/.cloudkit/install.sh` directly does **not** upgrade: the installer treats its own directory as a clone and uses it in place. Use the `curl` command above.
+</Aside>
+
+For a clone, update with Git instead: `git -C /path/to/cloudkit-cli pull`.
+
+## Uninstall
+
+<Tabs>
+<TabItem label="Installer-managed">
+
+```bash
+~/.cloudkit/install.sh --uninstall
+```
+
+Removes the CloudKit block from `~/.zshrc`, `~/.bashrc` and `~/.bash_profile`, then asks before deleting `~/.cloudkit`.
+
+</TabItem>
+<TabItem label="Clone">
+
+```bash
+/path/to/cloudkit-cli/install.sh --uninstall
+```
+
+Removes the rc block. The clone is left in place because the installer did not create it; delete it yourself if you no longer need it.
+
+</TabItem>
+</Tabs>
+
+Uninstalling never touches `~/.aws`, gcloud configuration, or tools such as the AWS CLI and `gcloud`. Open a new terminal afterwards: the current one still has the `ck` functions loaded.

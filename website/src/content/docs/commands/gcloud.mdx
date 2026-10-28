@@ -1,0 +1,103 @@
+---
+title: ck gcloud
+description: Reference for ck gcloud login, switch and logout, which select a gcloud configuration for the current terminal only.
+sidebar:
+  order: 2
+tableOfContents:
+  maxHeadingLevel: 2
+---
+
+import { Aside } from '@astrojs/starlight/components';
+import CommandFacts from '../../../components/CommandFacts.astro';
+
+`ck gcloud` selects a gcloud configuration for the current terminal only. For the model behind these commands, see [Sessions and credentials](/sessions/#google-cloud-sessions).
+
+| Command | Purpose |
+|---|---|
+| [`login`](#ck-gcloud-login) | Pick a configuration, authenticate if needed, show the session |
+| [`switch`](#ck-gcloud-switch) | Pick a configuration without logging in |
+| [`logout`](#ck-gcloud-logout) | Clear the session from this terminal |
+
+**Requires:** `gcloud` and `jq` for `login` and `switch`; at least one gcloud configuration (`gcloud config configurations list`).
+
+## ck gcloud login
+
+Start a gcloud session in this terminal and make sure it has working credentials.
+
+<CommandFacts
+	effect="local"
+	runs={['gcloud config configurations list', 'gcloud auth print-access-token', 'gcloud auth login (when needed)', 'gcloud auth describe']}
+	needs="gcloud, jq, one or more gcloud configurations"
+/>
+
+```text
+ck gcloud login [--reauth]
+```
+
+| Option | Description |
+|---|---|
+| `--reauth` | Run `gcloud auth login` even if the current credentials work. Must be the first argument. |
+
+### Behavior
+
+1. Lists configurations with their account and project, marking gcloud's global active one as `True` in the **Active** column. With one configuration, selects it automatically.
+2. Exports `CLOUDSDK_ACTIVE_CONFIG_NAME` and the `GCLOUD_*` variables for this terminal. The global active configuration does not change.
+3. Runs `gcloud auth print-access-token`. If it fails (no account, revoked or expired login), or `--reauth` was given, runs `gcloud auth login`, which opens a browser, and reads the account and project back from the configuration.
+4. Clears the screen, prints the session table, updates the prompt, and warns if credentials that cannot refresh are about to expire.
+
+```text title="Session table (illustrative)"
+━━━ GCloud Session Information ━━━
+
+Info           Value
+────────────   ────────────────────────────────────────────────────────
+Account        you@example.com
+Configuration  staging
+Project        my-project
+Region         us-central1
+Token Expiry   2026-10-21 15:10 UTC (auto-refresh)
+ADC            same as gcloud account
+```
+
+The **ADC** row compares Application Default Credentials with the session account; see [First steps with Google Cloud](/start/gcloud/#application-default-credentials). A project shown as `(unset)` means the configuration has no `core/project`.
+
+### Errors
+
+| Message | Cause |
+|---|---|
+| `Error: No gcloud configurations found.` | Create one with `ck setup gcloud`. |
+| `Invalid selection.` | The number was out of range. |
+| `Failed to authenticate with gcloud` | `gcloud auth login` did not leave an account on the configuration. |
+
+**Related:** [`ck gcloud switch`](#ck-gcloud-switch), [Troubleshooting: Google Cloud](/troubleshooting/#google-cloud-sessions)
+
+## ck gcloud switch
+
+Select another configuration for this terminal. Unlike `login`, it never starts a browser login, so it is fast when you know the credentials are fine.
+
+<CommandFacts
+	effect="local"
+	runs={['gcloud config configurations list', 'gcloud auth describe']}
+	needs="gcloud, jq"
+/>
+
+```text
+ck gcloud switch
+```
+
+Takes no arguments. Shows the same picker and session table as `login`. If the credentials turn out to be invalid, gcloud commands fail later; run `ck gcloud login` then.
+
+## ck gcloud logout
+
+Clear the gcloud session from this terminal.
+
+<CommandFacts effect="local" runs="(no cloud calls)" needs="Nothing" />
+
+```text
+ck gcloud logout
+```
+
+Unsets `GCLOUD_ACTIVE_CONFIG`, `GCLOUD_ACCOUNT`, `GCLOUD_PROJECT`, `GCLOUD_REGION` and `CLOUDSDK_ACTIVE_CONFIG_NAME`, then returns the terminal to "no account selected" (or to gcloud's global configuration when [`CLOUDKIT_GCLOUD_GLOBAL`](/configuration/#cloudkit_gcloud_global) is set). Prints `Successfully logged out. GCloud session cleared.`
+
+<Aside type="note">
+`ck gcloud logout` does not revoke credentials or change any configuration. To remove stored credentials, run `gcloud auth revoke <account>`.
+</Aside>

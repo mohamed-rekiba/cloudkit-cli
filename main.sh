@@ -7,9 +7,10 @@ else
 fi
 export CLOUDKIT_DIR
 
-alias sso_login="aws sso login --profile"
 # shellcheck source=session.sh disable=SC1090
 source "$CLOUDKIT_DIR/session.sh"
+# shellcheck source=services/_picker.sh disable=SC1090
+source "$CLOUDKIT_DIR/services/_picker.sh"
 # shellcheck source=services/ec2.sh disable=SC1090
 source "$CLOUDKIT_DIR/services/ec2.sh"
 # shellcheck source=services/ecs.sh disable=SC1090
@@ -18,3 +19,7 @@ source "$CLOUDKIT_DIR/services/ecs.sh"
 source "$CLOUDKIT_DIR/services/gce.sh"
 # shellcheck source=services/gce_ig.sh disable=SC1090
 source "$CLOUDKIT_DIR/services/gce_ig.sh"
+# shellcheck source=services/setup.sh disable=SC1090
+source "$CLOUDKIT_DIR/services/setup.sh"
+# shellcheck source=ck.sh disable=SC1090
+source "$CLOUDKIT_DIR/ck.sh"

@@ -1,0 +1,86 @@
+---
+title: Accounts, regions and projects
+description: How each ck command decides which AWS account and region, or which Google Cloud project, zone and region, it acts on, and how to override them.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+Before running a command that changes something, you should know exactly where it will run. This page explains how CloudKit chooses the target for each command family.
+
+## AWS: profile and region come from the session
+
+`ck ec2` and `ck ecs` commands have **no `--profile` or `--region` flags**. They run `aws` with whatever the environment says:
+
+| Target | Source |
+|---|---|
+| Account and identity | `AWS_PROFILE`, set by `ck aws login` or `ck aws switch` |
+| Region | `AWS_REGION` / `AWS_DEFAULT_REGION`, set from the profile's `region` |
+
+Check both with `ck status` or your prompt (`[profile:region]`) before running a command.
+
+### Run one command against another region or profile
+
+Because `ck` is a shell function, a variable assignment in front of it applies to that one command only, in both bash and zsh:
+
+```bash
+AWS_REGION=us-west-2 ck ec2 ls-running        # another region, same profile
+AWS_PROFILE=staging ck ecs clusters           # another profile, same region variables
+```
+
+The terminal's session is unchanged afterwards. With `AWS_PROFILE=…`, the region still comes from `AWS_REGION` in the environment, not from the other profile; set both if they differ.
+
+<Aside type="caution" title="Profiles without a region">
+If the selected profile has no `region`, CloudKit unsets `AWS_REGION` and `AWS_DEFAULT_REGION` rather than keeping the previous profile's region. AWS commands then fail with `You must specify a region`. Add `region = …` to the profile, or prefix commands with `AWS_REGION=…`.
+</Aside>
+
+### Accounts
+
+Each profile points at one account. To work in another account, select a profile for it, typically a [chained role](/sessions/#chained-profiles) assumed from your SSO profile. The **Account** row of the session table and `AWS_ACCOUNT_ID` show the account in use.
+
+## Google Cloud: project from the configuration, zone looked up per VM
+
+| Target | Source | Override |
+|---|---|---|
+| Account | The configuration's `core/account` | `ck gcloud switch` |
+| Project | The configuration's `core/project` | `--project <id>` on `ck gce start`, `stop`, `reset`, `ssh`, `scp`, `port-forward` |
+| Zone (for one VM) | Looked up from the VM name | `--zone <zone>` on the same commands |
+| Region (for a MIG) | Always given on the command line | `--region <region>` on `ck mig` |
+
+### Zone lookup
+
+Compute Engine VM names are unique per zone, not per project, so `gcloud` needs a zone for most operations. When you leave out `--zone`, CloudKit runs:
+
+```bash
+gcloud compute instances list --filter="name=(my-vm)" --format="value(zone.basename())"
+```
+
+- One match: CloudKit prints `Using zone: us-central1-a` and continues.
+- No match: `Error: instance 'my-vm' not found. Pass --zone explicitly.`
+- Matches in several zones: CloudKit lists them and asks you to pass `--zone`.
+
+The configuration's default `compute/zone` is **not** used for this lookup. Passing `--zone` skips the extra API call and is the safest choice in scripts.
+
+### Commands without a `--project` flag
+
+`ck gce ls`, `ls-running`, `ls-stopped` and the `ck mig` commands always use the configuration's project. To query another project for one command, use gcloud's own environment override:
+
+```bash
+CLOUDSDK_CORE_PROJECT=other-project ck gce ls
+```
+
+Or switch the terminal to a configuration for that project with `ck gcloud switch`.
+
+### Regions
+
+`ck mig` commands work on **regional** managed instance groups and require `--region` (except `ck mig list`, where it is an optional filter). The configuration's `compute/region` is not used. The **Region** row in the gcloud session table is informational.
+
+## Quick reference
+
+| I want to… | Command |
+|---|---|
+| See where this terminal points | `ck status` |
+| Use another AWS profile for this terminal | `ck aws switch` |
+| Run one AWS command in another region | `AWS_REGION=<region> ck …` |
+| Use another gcloud configuration for this terminal | `ck gcloud switch` |
+| Run one VM command in another project | `ck gce ssh my-vm --project <project>` |
+| Avoid zone lookup | `--zone <zone>` |

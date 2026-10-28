@@ -1,0 +1,86 @@
+---
+title: Switch between environments
+description: Work with development, staging and production AWS accounts and Google Cloud projects side by side, using per-terminal sessions and production markers.
+---
+
+import { Aside, Steps } from '@astrojs/starlight/components';
+
+Most teams separate environments into different AWS accounts or Google Cloud projects. CloudKit's per-terminal sessions let you keep each environment in its own terminal, so a command typed in the staging window can never reach production.
+
+## Set up one profile or configuration per environment
+
+<Steps>
+
+1. **AWS:** create one profile per environment account, for example `dev-admin`, `staging-admin` and `prod-admin`, with `ck setup aws` or `aws configure sso`. Give each a `region`.
+
+   If production is reached by assuming a role from another account, create a [chained profile](/sessions/#chained-profiles) such as `prod-deploy` with `source_profile = dev-admin`.
+
+2. **Google Cloud:** create one configuration per project with `ck setup gcloud`, for example `dev`, `staging` and `prod`.
+
+3. Make sure production names match the [production pattern](/concepts/prompt-and-production/#production-detection). The default matches names containing `prod`, `production` or `prd` as a separate word. If your production profile is called something else, set `CLOUDKIT_PROD_PATTERN`.
+
+</Steps>
+
+## Work in separate terminals
+
+<Steps>
+
+1. Open a terminal for staging and log in:
+
+   ```bash
+   ck aws login          # choose staging-admin
+   ```
+
+   Prompt: `[staging-admin:eu-west-1] $`
+
+2. Open a second terminal for production:
+
+   ```bash
+   ck aws login          # choose prod-admin
+   ```
+
+   The session table shows a red **▲ PRODUCTION** banner, and the prompt becomes `[PROD] [prod-admin:eu-west-1] $`.
+
+3. Before any command that changes something, check the prompt or run:
+
+   ```bash
+   ck status
+   ```
+
+4. When you finish production work, end the session in that terminal:
+
+   ```bash
+   ck aws logout
+   ```
+
+</Steps>
+
+Google Cloud works the same way with `ck gcloud login` and `ck gcloud logout`. One terminal can hold an AWS session and a gcloud session at the same time; the prompt shows both.
+
+## Switch within one terminal
+
+```bash
+ck aws switch       # any profile, including access-key and role profiles
+ck gcloud switch    # another configuration, without logging in
+```
+
+Switching replaces the terminal's session completely; nothing from the previous profile remains.
+
+## Run one command against another environment
+
+To look at another environment without switching, prefix a single command:
+
+```bash
+AWS_PROFILE=staging-admin ck ecs services my-cluster
+CLOUDSDK_CORE_PROJECT=my-staging-project ck gce ls
+```
+
+See [Accounts, regions and projects](/concepts/targeting/) for the details and caveats.
+
+## Scripts and automation
+
+A script inherits the session of the terminal it runs in. For scripts that must target a specific environment regardless of the terminal, pass it explicitly to the native CLIs (`aws --profile staging-admin …`, `gcloud --configuration staging …`) rather than relying on CloudKit's session. CloudKit's commands are interactive helpers and are not designed for unattended use: several of them prompt for input or clear the screen.
+
+<Aside type="caution" title="Guardrails are visual only">
+The production banner and `[PROD]` marker do not block anything, and `ck` commands never ask for confirmation. Restrict what production identities can do with IAM, and prefer read-only roles for day-to-day production access.
+</Aside>

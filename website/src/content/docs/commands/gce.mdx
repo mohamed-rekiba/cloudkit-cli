@@ -1,0 +1,252 @@
+---
+title: ck gce
+description: Reference for ck gce commands that list, start, stop and reset Compute Engine VMs, SSH and copy files, and forward ports through IAP.
+sidebar:
+  order: 5
+tableOfContents:
+  maxHeadingLevel: 2
+---
+
+import { Aside } from '@astrojs/starlight/components';
+import CommandFacts from '../../../components/CommandFacts.astro';
+
+`ck gce` works on Compute Engine VMs in the terminal's gcloud configuration. Start a session with [`ck gcloud login`](/commands/gcloud/#ck-gcloud-login) first.
+
+| Command | Purpose | Effect |
+|---|---|---|
+| [`ls`](#ck-gce-ls) | List VMs | Read-only |
+| [`ls-running`](#ck-gce-ls-running) | List running VMs | Read-only |
+| [`ls-stopped`](#ck-gce-ls-stopped) | List stopped VMs | Read-only |
+| [`start` / `stop` / `reset`](#ck-gce-start--stop--reset) | Change a VM's power state | Changes resources / interrupts workloads |
+| [`ssh`](#ck-gce-ssh) | SSH, run a command, or hold port forwards open | Interactive |
+| [`scp`](#ck-gce-scp) | Copy files to or from a VM | Writes files |
+| [`port-forward`](#ck-gce-port-forward) | Forward a local port through IAP | Interactive |
+
+## Location flags
+
+`start`, `stop`, `reset`, `ssh`, `scp` and `port-forward` accept:
+
+| Flag | Description |
+|---|---|
+| `--zone <zone>` | The VM's zone. When omitted, CloudKit looks it up from the VM name and prints `Using zone: <zone>`. If the name exists in several zones, you must pass it. See [zone lookup](/concepts/targeting/#zone-lookup). |
+| `--project <project>` | Project ID to use instead of the configuration's project. Also scopes the zone lookup and the `ssh` picker. |
+
+For these commands, flags can appear anywhere on the line. Everything after a bare `--` is treated as a positional argument (for example, part of a remote command). The `ls` commands do **not** accept these flags.
+
+## ck gce ls
+
+List VMs in the configuration's project, in gcloud's standard table.
+
+<CommandFacts effect="read" runs="gcloud compute instances list" needs="gcloud session; compute.instances.list" />
+
+```text
+ck gce ls [--filter <pattern>]
+```
+
+| Option | Description |
+|---|---|
+| `--filter <pattern>` | Optional. Only VMs whose name matches `pattern`, a regular expression (gcloud's `name~pattern`). Must be the first argument. |
+
+```bash
+ck gce ls
+ck gce ls --filter web          # names containing "web"
+ck gce ls --filter '^web-[0-9]+$'
+```
+
+```text title="Output (illustrative)"
+NAME   ZONE           MACHINE_TYPE  PREEMPTIBLE  INTERNAL_IP  EXTERNAL_IP  STATUS
+web-1  us-central1-a  e2-medium                  10.128.0.2                RUNNING
+web-2  us-central1-b  e2-medium                  10.128.0.3                TERMINATED
+```
+
+To list another project, see [Commands without a `--project` flag](/concepts/targeting/#commands-without-a---project-flag).
+
+## ck gce ls-running
+
+List VMs with status `RUNNING`. Same output as [`ls`](#ck-gce-ls).
+
+<CommandFacts effect="read" runs='gcloud compute instances list --filter="status=RUNNING"' needs="gcloud session; compute.instances.list" />
+
+```text
+ck gce ls-running
+```
+
+## ck gce ls-stopped
+
+List VMs with status `TERMINATED`, which is how Compute Engine reports a stopped VM. Suspended VMs (`SUSPENDED`) are not included.
+
+<CommandFacts effect="read" runs='gcloud compute instances list --filter="status=TERMINATED"' needs="gcloud session; compute.instances.list" />
+
+```text
+ck gce ls-stopped
+```
+
+## ck gce start / stop / reset
+
+Start a stopped VM, stop a running VM, or hard-reset it.
+
+<CommandFacts
+	effect="disrupt"
+	runs="gcloud compute instances start|stop|reset <instance> --zone <zone>"
+	needs="gcloud session; compute.instances.start / stop / reset"
+/>
+
+```text
+ck gce start <instance-name> [--zone <zone>] [--project <project>]
+ck gce stop  <instance-name> [--zone <zone>] [--project <project>]
+ck gce reset <instance-name> [--zone <zone>] [--project <project>]
+```
+
+| Command | What happens |
+|---|---|
+| `start` | Boots the VM. Compute charges resume. |
+| `stop` | Shuts the VM down. Persistent disks are kept; ephemeral external IPs are released. |
+| `reset` | Hard reset, like pressing a reset button: no clean shutdown, the VM restarts immediately. Use it only for a hung VM. |
+
+```bash
+ck gce start my-vm
+ck gce stop my-vm --zone us-central1-a
+ck gce reset my-vm --project my-project
+```
+
+CloudKit prints `Running '<action>' on instance <name>...`, then gcloud waits for the operation to finish and prints its result.
+
+<Aside type="danger" title="No confirmation">
+`stop` and `reset` run immediately, even in production. VMs in a managed instance group may be recreated by the group; use [`ck mig`](/commands/mig/) for those.
+</Aside>
+
+## ck gce ssh
+
+SSH to a VM, run one command, or hold SSH port forwards open.
+
+<CommandFacts
+	effect="session"
+	runs={['gcloud compute instances list (picker, zone lookup)', 'gcloud compute ssh']}
+	needs="gcloud session, SSH access (OS Login or metadata keys); IAP permissions when tunneling"
+/>
+
+```text
+ck gce ssh [instance-name] [--zone <zone>] [--project <project>]
+           [--tunnel-iap | --no-iap] [--forward <local:host:remote>]...
+           [--tunnel-only] [--] [command...]
+```
+
+| Argument / option | Description |
+|---|---|
+| `instance-name` | Optional. Must be the first argument after `ssh`. When omitted (or the first argument is a flag), CloudKit shows a picker of running VMs, filtered by `--project` and `--zone` if given. |
+| `--tunnel-iap` | Connect through Identity-Aware Proxy, so the VM needs no external IP. |
+| `--no-iap` | Never add `--tunnel-through-iap`, even with `--forward`. |
+| `--forward <local:host:remote>` | Forward `localhost:<local>` to `<host>:<remote>` as seen **from the VM** (an `ssh -L` spec). Repeatable. Turns on IAP unless `--no-iap` is given. |
+| `--tunnel-only` | With `--forward` and no command: keep the tunnels open without a shell (`ssh -N`). Prints `Holding tunnel(s) open: … (Ctrl+C to close)`. |
+| `command` | Optional. Remaining words, joined with spaces, run instead of a shell (`gcloud compute ssh --command`). |
+
+### Picker
+
+```text title="Picker (illustrative)"
+Running GCE instances:
+
+#    Name   Zone           Internal IP
+───  ─────  ─────────────  ───────────
+[1]  web-1  us-central1-a  10.128.0.2
+[2]  web-2  us-central1-b  10.128.0.3
+
+Select an instance [1-2]:
+```
+
+With one running VM, it connects without asking; with none, it prints `No running instances found.`
+
+### Examples
+
+```bash
+ck gce ssh                                    # pick a running VM
+ck gce ssh my-vm                              # interactive shell; zone looked up
+ck gce ssh my-vm --tunnel-iap                 # through IAP (no external IP needed)
+ck gce ssh my-vm -- df -h /                   # run one command
+
+# MySQL listening on the VM's 127.0.0.1:3306, available at localhost:3308; no shell
+ck gce ssh my-vm --forward 3308:127.0.0.1:3306 --tunnel-only
+
+# Two forwards and a shell
+ck gce ssh my-vm --forward 3308:127.0.0.1:3306 --forward 6380:127.0.0.1:6379
+
+# Pick a VM, then hold a tunnel
+ck gce ssh --forward 3308:127.0.0.1:3306 --tunnel-only
+```
+
+<Aside type="tip" title="Use -- before remote commands with flags">
+CloudKit recognizes its own flags anywhere on the line, including `-r`. Put `--` before a remote command so none of its words are taken as CloudKit flags: `ck gce ssh my-vm -- ls -r /tmp`.
+</Aside>
+
+### Notes
+
+- The first connection may generate an SSH key (`~/.ssh/google_compute_engine`) and add it to project metadata or OS Login. This is standard `gcloud compute ssh` behavior.
+- Without `--tunnel-iap`, gcloud connects to the VM's external IP. Recent gcloud versions fall back to IAP on their own when the VM has no external IP.
+- IAP needs a firewall rule allowing TCP 22 from `35.235.240.0/20` and the IAP-secured Tunnel User role. See [Permissions](/reference/permissions/#compute-engine).
+
+**Related:** [Connect to a Compute Engine VM](/guides/connect-gce/), [IAP and SSH failures](/troubleshooting/#iap-or-ssh-connection-fails)
+
+## ck gce scp
+
+Copy files between your machine and a VM.
+
+<CommandFacts
+	effect="change"
+	runs={['gcloud compute instances list (zone lookup)', 'gcloud compute scp']}
+	needs="gcloud session, SSH access to the VM; IAP permissions with --tunnel-iap"
+/>
+
+```text
+ck gce scp <source>... <destination> [--zone <zone>] [--project <project>] [--tunnel-iap] [-r]
+```
+
+| Argument / option | Description |
+|---|---|
+| `source`, `destination` | Local paths, or remote paths written `instance:path` (optionally `user@instance:path`). At least one must be remote. |
+| `-r`, `--recurse` | Copy directories recursively. |
+| `--tunnel-iap` | Copy through IAP. Unlike `ssh`, IAP is never turned on automatically. |
+| `--no-iap` | Accepted; cancels `--tunnel-iap`. |
+
+```bash
+ck gce scp ./app.env my-vm:/tmp/                              # upload
+ck gce scp my-vm:/var/log/syslog ./syslog --zone us-central1-a  # download
+ck gce scp -r ./dist my-vm:/srv/app --tunnel-iap              # directory, through IAP
+```
+
+The zone is looked up from the first argument that looks remote: it contains `:` and does not start with `/` or `./`. Write local paths that contain a colon with a leading `./`. Remote files are written as your SSH user, so the destination directory must be writable by that user (for example `/tmp` or your home directory); existing files are overwritten.
+
+## ck gce port-forward
+
+Forward a local port to a port on the VM, or to another host the VM can reach, through IAP.
+
+<CommandFacts
+	effect="session"
+	runs={['gcloud compute start-iap-tunnel (without host)', 'gcloud compute ssh --tunnel-through-iap -- -N -L (with host)']}
+	needs="gcloud session; IAP firewall rule and iap.tunnelInstances.accessViaIAP; SSH access when a host is given"
+/>
+
+```text
+ck gce port-forward <remote-port> <local-port> <instance-name> [host] [--zone <zone>] [--project <project>]
+```
+
+| Argument | Description |
+|---|---|
+| `remote-port` | Required. Port on the VM, or on `host` when given. |
+| `local-port` | Required. Port to listen on at `localhost`. |
+| `instance-name` | Required. The VM to tunnel to or through. There is no picker. |
+| `host` | Optional. A host name or IP the **VM** can reach, such as a Cloud SQL private IP. |
+
+The argument order matches [`ck ec2 port-forward`](/commands/ec2/#ck-ec2-port-forward). The two forms use different mechanisms:
+
+| Form | Mechanism | Firewall needs |
+|---|---|---|
+| Without `host` | IAP TCP forwarding (`start-iap-tunnel`). No SSH involved. | Ingress from `35.235.240.0/20` to `remote-port` on the VM |
+| With `host` | SSH through IAP with `-N -L local:host:remote`. | Ingress from `35.235.240.0/20` to TCP 22, plus SSH access to the VM |
+
+```bash
+ck gce port-forward 8080 8080 my-vm                # localhost:8080 -> my-vm:8080
+ck gce port-forward 3306 3308 my-vm 10.20.0.5      # localhost:3308 -> 10.20.0.5:3306 via my-vm
+```
+
+The tunnel stays open until you press `Ctrl+C`. `--tunnel-iap` and `--no-iap` have no effect here: this command always uses IAP.
+
+**Related:** [Forward a port and reach a private database](/guides/port-forwarding/)

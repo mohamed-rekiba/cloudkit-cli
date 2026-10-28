@@ -1,0 +1,72 @@
+---
+// At-a-glance facts for one `ck` subcommand: what it changes, what it runs, what it needs.
+import { Badge } from '@astrojs/starlight/components';
+
+interface Props {
+	/** read: no changes; change: changes resources; disrupt: interrupts workloads; session: interactive connection; local: this shell only */
+	effect: 'read' | 'change' | 'disrupt' | 'session' | 'local';
+	/** Underlying command(s) CloudKit runs. */
+	runs: string | string[];
+	/** Session, tools and permissions needed. */
+	needs: string;
+}
+
+const { effect, runs, needs } = Astro.props;
+const effects = {
+	read: { text: 'Read-only', variant: 'success' },
+	change: { text: 'Changes cloud resources', variant: 'caution' },
+	disrupt: { text: 'Interrupts running workloads', variant: 'danger' },
+	session: { text: 'Interactive session', variant: 'note' },
+	local: { text: 'This shell only', variant: 'default' },
+} as const;
+const badge = effects[effect];
+const commands = Array.isArray(runs) ? runs : [runs];
+---
+
+<dl class="ck-facts not-content">
+	<dt>Effect</dt>
+	<dd><Badge text={badge.text} variant={badge.variant} /></dd>
+	<dt>Runs</dt>
+	<dd>{commands.map((c) => <code>{c}</code>)}</dd>
+	<dt>Needs</dt>
+	<dd>{needs}</dd>
+</dl>
+
+<style>
+	.ck-facts {
+		display: grid;
+		grid-template-columns: max-content 1fr;
+		gap: 0.35rem 1rem;
+		margin-top: 1rem;
+		padding: 0.75rem 1rem;
+		border: 1px solid var(--sl-color-hairline);
+		border-inline-start: 3px solid var(--sl-color-accent);
+		border-radius: 0.25rem;
+		background: var(--ck-facts-bg);
+		font-size: var(--sl-text-sm);
+	}
+	dt {
+		font-weight: 600;
+		color: var(--sl-color-white);
+	}
+	dd {
+		margin: 0;
+		color: var(--sl-color-gray-2);
+		display: flex;
+		flex-wrap: wrap;
+		gap: 0.25rem 0.5rem;
+		align-items: center;
+	}
+	code {
+		font-size: 0.85em;
+		overflow-wrap: anywhere;
+	}
+	@media (max-width: 30rem) {
+		.ck-facts {
+			grid-template-columns: 1fr;
+		}
+		dd {
+			margin-bottom: 0.35rem;
+		}
+	}
+</style>

@@ -1,0 +1,101 @@
+---
+title: Command overview
+description: Every ck command on one page, with syntax conventions and the placeholders used throughout the CloudKit documentation.
+sidebar:
+  label: Overview
+  order: 0
+---
+
+Every CloudKit command starts with `ck`, followed by a command family and a subcommand. This page lists them all; follow a link for arguments, examples, output and cautions.
+
+## All commands
+
+### Sessions
+
+| Command | Purpose |
+|---|---|
+| [`ck aws login`](/commands/aws/#ck-aws-login) | Pick an SSO profile, log in if needed, show the session |
+| [`ck aws switch`](/commands/aws/#ck-aws-switch) | Switch this terminal to any AWS profile |
+| [`ck aws sso <profile>`](/commands/aws/#ck-aws-sso) | Run `aws sso login` for a profile |
+| [`ck aws logout`](/commands/aws/#ck-aws-logout) | Clear the AWS session from this terminal |
+| [`ck gcloud login [--reauth]`](/commands/gcloud/#ck-gcloud-login) | Pick a gcloud configuration for this terminal and authenticate |
+| [`ck gcloud switch`](/commands/gcloud/#ck-gcloud-switch) | Switch this terminal to another gcloud configuration |
+| [`ck gcloud logout`](/commands/gcloud/#ck-gcloud-logout) | Clear the gcloud session from this terminal |
+| [`ck status`](/commands/general/#ck-status) | Show this terminal's sessions |
+
+### AWS services
+
+| Command | Purpose |
+|---|---|
+| [`ck ec2 ls`, `ls-running`, `ls-stopped`](/commands/ec2/#ck-ec2-ls) | List instances |
+| [`ck ec2 session [instance-id]`](/commands/ec2/#ck-ec2-session) | Open an SSM shell |
+| [`ck ec2 run <instance-id>`](/commands/ec2/#ck-ec2-run) | Start an instance |
+| [`ck ec2 stop <instance-id>`](/commands/ec2/#ck-ec2-stop) | Stop an instance |
+| [`ck ec2 port-forward …`](/commands/ec2/#ck-ec2-port-forward) | Forward a local port through SSM |
+| [`ck ecs clusters`, `services`](/commands/ecs/#ck-ecs-clusters) | List clusters and services |
+| [`ck ecs tasks`, `service-tasks`, `task-info`](/commands/ecs/#ck-ecs-tasks) | Inspect tasks |
+| [`ck ecs describe`](/commands/ecs/#ck-ecs-describe) | Summarize a service |
+| [`ck ecs exec`, `exec-running`](/commands/ecs/#ck-ecs-exec) | Run a command in a container |
+| [`ck ecs logs`](/commands/ecs/#ck-ecs-logs) | Show a container's recent CloudWatch log lines |
+| [`ck ecs stop`](/commands/ecs/#ck-ecs-stop) | Stop a task |
+
+### Google Cloud services
+
+| Command | Purpose |
+|---|---|
+| [`ck gce ls`, `ls-running`, `ls-stopped`](/commands/gce/#ck-gce-ls) | List VMs |
+| [`ck gce start`, `stop`, `reset`](/commands/gce/#ck-gce-start--stop--reset) | Change a VM's power state |
+| [`ck gce ssh`](/commands/gce/#ck-gce-ssh) | SSH, run a command, or hold port forwards open |
+| [`ck gce scp`](/commands/gce/#ck-gce-scp) | Copy files to or from a VM |
+| [`ck gce port-forward`](/commands/gce/#ck-gce-port-forward) | Forward a local port through IAP |
+| [`ck mig list`, `describe`](/commands/mig/#ck-mig-list) | Inspect managed instance groups |
+| [`ck mig restart`, `recreate`](/commands/mig/#ck-mig-restart) | Rolling restart or replacement of a group's VMs |
+
+### Setup and diagnostics
+
+| Command | Purpose |
+|---|---|
+| [`ck setup [aws\|gcloud]`](/commands/setup/#ck-setup) | Guided AWS profile or gcloud configuration setup |
+| [`ck doctor`](/commands/setup/#ck-doctor) | Check dependencies and configuration |
+| [`ck version`](/commands/general/#ck-version) | Show the installed version |
+| [`ck help [command]`](/commands/general/#ck-help) | Show help in the terminal |
+
+## Reading the syntax
+
+| Notation | Meaning |
+|---|---|
+| `<instance-id>` | Required value |
+| `[host]` | Optional value |
+| `[--running]` | Optional flag |
+| `<source>...` | One or more values |
+| `[--forward <spec>]...` | Optional flag that can be repeated |
+| `a \| b` | Use one of the alternatives |
+
+Positional arguments must appear in the order shown. Flags are positional too unless the reference says otherwise: for example, `ck ecs tasks` recognizes `--running` only as its third word, and `ck mig` expects `--region` straight after the group name. `ck gce` commands are the exception and accept their flags anywhere.
+
+## Placeholders used in these docs
+
+Replace these with your own values. None of them refer to real resources.
+
+| Placeholder | Stands for |
+|---|---|
+| `dev-admin`, `staging`, `prod-admin` | AWS profile names |
+| `111111111111`, `222222222222` | AWS account IDs |
+| `i-0123456789abcdef0` | An EC2 instance ID (`ck ec2 ls` shows yours) |
+| `my-cluster`, `my-service`, `app` | ECS cluster, service and container names |
+| `0123456789abcdef0123456789abcdef` | An ECS task ID (the last part of the task ARN) |
+| `mydb.example.internal` | A private database host name, such as an RDS endpoint |
+| `staging` (gcloud) | A gcloud configuration name |
+| `my-project`, `my-vm`, `web-mig` | Google Cloud project ID, VM name and managed instance group |
+| `us-central1`, `us-central1-a` | A Google Cloud region and zone |
+| `you@example.com` | Your Google account |
+
+Sample output on these pages is illustrative: the layout matches what CloudKit prints, but names, IDs and times are made up.
+
+## Help in the terminal
+
+```bash
+ck help             # all command families
+ck help ec2         # one family's subcommands and examples
+ck ec2              # same as ck help ec2
+```

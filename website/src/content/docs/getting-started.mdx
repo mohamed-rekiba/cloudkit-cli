@@ -1,0 +1,113 @@
+---
+title: Quick start
+description: Install CloudKit, check dependencies, set up credentials, and run your first AWS or Google Cloud command.
+---
+
+import { Aside, LinkCard, Steps, Tabs, TabItem } from '@astrojs/starlight/components';
+
+This page takes you from nothing to a working `ck` command in about five minutes. Each step links to a page with more detail.
+
+## Before you begin
+
+| Requirement | Details |
+|---|---|
+| Operating system | macOS or Linux. Windows is not supported directly. |
+| Shell | **bash** or **zsh**. CloudKit is loaded into your shell as functions, so it needs one of these as your interactive shell. |
+| Package manager | Optional, for automatic dependency installs: `brew` (macOS), or `apt`, `dnf`, `yum` or `pacman` (Linux). |
+| Cloud account | An AWS account you can sign in to (SSO, access keys, or a role), and/or a Google account with access to a Google Cloud project. |
+| `sudo` | Needed on Linux when the installer installs system packages. |
+
+## Steps
+
+<Steps>
+
+1. **Install CloudKit.**
+
+   ```bash
+   curl -fsSL https://github.com/shabayekdes/cloudkit-cli/releases/latest/download/install.sh | bash
+   ```
+
+   The installer asks which clouds you use, installs missing tools (AWS CLI v2, Session Manager plugin, `gcloud`, `jq`, `python3`) after one confirmation, downloads the latest release to `~/.cloudkit`, and adds a `source` line to your shell's rc file. See [Installation](/start/installation/) for options and manual installs.
+
+2. **Load CloudKit in your terminal.**
+
+   Accept the installer's offer to start a new shell, or open a new terminal. Then confirm `ck` is available:
+
+   ```bash
+   ck version
+   ```
+
+3. **Check dependencies.**
+
+   ```bash
+   ck doctor
+   ```
+
+   Every line should show `✓` or `!`. A `✗` means a required tool is missing; the line tells you how to install it. Warnings (`!`) for things such as Application Default Credentials are optional. See [`ck doctor`](/commands/setup/#ck-doctor).
+
+4. **Set up credentials.** Skip this if you already have AWS profiles in `~/.aws/config` or gcloud configurations.
+
+   <Tabs syncKey="cloud">
+   <TabItem label="AWS">
+
+   ```bash
+   ck setup aws
+   ```
+
+   Choose **AWS SSO / IAM Identity Center**, **access keys**, or a **role assumed from an existing profile**. CloudKit runs the standard `aws configure` commands, so the result is an ordinary profile in `~/.aws/config`.
+
+   </TabItem>
+   <TabItem label="Google Cloud">
+
+   ```bash
+   ck setup gcloud
+   ```
+
+   Name a configuration (for example `staging`), enter the account, project, region and zone, and log in in the browser.
+
+   </TabItem>
+   </Tabs>
+
+5. **Start a session and run a command.**
+
+   <Tabs syncKey="cloud">
+   <TabItem label="AWS">
+
+   ```bash
+   ck aws login       # pick an SSO profile; logs in only if needed
+   ck ec2 ls          # list instances in the profile's region
+   ck ec2 session     # pick a running instance and open a shell
+   ```
+
+   </TabItem>
+   <TabItem label="Google Cloud">
+
+   ```bash
+   ck gcloud login    # pick a configuration for this terminal
+   ck gce ls          # list VMs in the configuration's project
+   ck gce ssh         # pick a running VM and SSH to it
+   ```
+
+   </TabItem>
+   </Tabs>
+
+</Steps>
+
+<Aside type="tip" title="Sessions are per terminal">
+The profile or configuration you pick applies to the current terminal only. A new terminal starts with no AWS profile and no gcloud account until you run `ck aws login` or `ck gcloud login`. See [Sessions and credentials](/sessions/).
+</Aside>
+
+## If something goes wrong
+
+| Symptom | Fix |
+|---|---|
+| `ck: command not found` | The rc file was not reloaded. Open a new terminal or run `exec zsh` / `exec bash`. [More](/troubleshooting/#ck-command-not-found) |
+| `ck aws login` says no profiles were found | It lists only SSO profiles. Use `ck aws switch` for access-key profiles. [More](/troubleshooting/#no-profiles-in-ck-aws-login) |
+| `You do not currently have an active account selected` | Expected in a new terminal. Run `ck gcloud login`. [More](/troubleshooting/#gcloud-says-no-active-account-in-a-new-terminal) |
+| SSM session fails to start | The instance needs the SSM agent and an instance role. [More](/troubleshooting/#ssm-session-fails-to-start) |
+
+## Next steps
+
+<LinkCard title="First steps with AWS" href="/start/aws/" description="Profile types, logging in, and a first EC2 and ECS workflow." />
+<LinkCard title="First steps with Google Cloud" href="/start/gcloud/" description="Configurations, logging in, and a first Compute Engine workflow." />
+<LinkCard title="How CloudKit works" href="/concepts/how-it-works/" description="What ck does in your shell and which native commands it runs." />

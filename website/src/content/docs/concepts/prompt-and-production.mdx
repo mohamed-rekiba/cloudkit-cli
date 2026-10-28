@@ -1,0 +1,105 @@
+---
+title: Prompt and production safety
+description: How CloudKit marks the shell prompt with the active session, detects production environments, and how to customize or disable both.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+CloudKit shows the active session in your prompt and highlights sessions that look like production. Both are visual cues only: CloudKit does not block or confirm commands.
+
+## The prompt prefix
+
+After you log in or switch, CloudKit prepends one segment per active session to your prompt:
+
+```text
+[dev-admin:eu-west-1] ~/src $
+[dev-admin:eu-west-1] [gcloud:you@example.com:my-project] ~/src $
+[PROD] [prod-admin:eu-west-1] ~/src $
+```
+
+| Segment | Built from |
+|---|---|
+| `[profile:region]` | `AWS_PROFILE` and `AWS_DEFAULT_REGION` |
+| `[gcloud:account:project]` | `GCLOUD_ACCOUNT` and `GCLOUD_PROJECT` |
+| `[PROD]` (bold red) | Added before a segment whose session [looks like production](#production-detection) |
+
+How it works:
+
+- zsh: CloudKit sets `PROMPT`; bash: `PS1`.
+- The first time, the original prompt is saved in `ORG_PROMPT`. Later changes rebuild the prompt from that saved copy, so prefixes don't accumulate.
+- On logout, the prefix for the remaining session is kept; when no session is left, the original prompt is restored.
+
+### Prompt themes and frameworks
+
+Themes that rebuild the prompt before every command (for example Starship, Powerlevel10k or oh-my-posh) can overwrite CloudKit's prefix, or show it next to their own cloud segment. Turn CloudKit's prefix off and let the theme display the session instead:
+
+```bash title="~/.zshrc"
+export CLOUDKIT_NO_PROMPT=1
+source ~/.cloudkit/main.sh
+```
+
+Most themes read `AWS_PROFILE` and gcloud's active configuration, which CloudKit sets per terminal (`CLOUDSDK_ACTIVE_CONFIG_NAME`), so they reflect CloudKit sessions.
+
+<Aside type="note" title="Spaceship">
+Spaceship's gcloud section reads gcloud's files directly and would keep showing the global configuration in a terminal with no gcloud session. CloudKit sets `SPACESHIP_GCLOUD_SHOW=false` while no gcloud account is selected and restores your own setting when you log in.
+</Aside>
+
+## Production detection
+
+CloudKit treats a session as production when a name matches the pattern in `CLOUDKIT_PROD_PATTERN`. The default is:
+
+```text
+(^|[-_.:/ ])(prod|production|prd)($|[-_.:/ 0-9])
+```
+
+It is an extended regular expression matched **case-insensitively**: `prod`, `production` or `prd` as a separate word, delimited by the start or end of the name, `-`, `_`, `.`, `:`, `/` or a space, and optionally followed by a digit.
+
+| Name | Production? |
+|---|---|
+| `prod`, `Production`, `prod-admin`, `my-prod`, `app.prd`, `prod2`, `dev-prd-db` | Yes |
+| `pre-prod`, `non-prod` | **Yes**: `prod` is a separate word |
+| `preprod`, `nonprod`, `product`, `staging` | No |
+
+### What is checked
+
+| Session | Names checked |
+|---|---|
+| AWS | The profile name only. Account IDs and role names are not checked. |
+| Google Cloud | The configuration name and the project ID |
+
+### Where it shows
+
+- A red **▲ PRODUCTION** banner at the top of the session table printed by `ck aws login`, `ck aws switch`, `ck gcloud login`, `ck gcloud switch`, and `ck setup gcloud` when it starts a session.
+- A red `[PROD]` marker in the prompt (unless `CLOUDKIT_NO_PROMPT` is set).
+
+It does **not** show in `ck status`, and no command asks for confirmation because of it. Commands such as `ck ec2 stop`, `ck gce reset`, `ck ecs stop` and `ck mig recreate` run immediately in any environment.
+
+### Customize the pattern
+
+Set `CLOUDKIT_PROD_PATTERN` in your rc file. Some examples:
+
+```bash title="~/.zshrc"
+# Also treat "live" as production
+export CLOUDKIT_PROD_PATTERN='(^|[-_.:/ ])(prod|production|prd|live)($|[-_.:/ 0-9])'
+
+# Exactly these profile / configuration / project names
+export CLOUDKIT_PROD_PATTERN='^(main-account|billing|acme-web-prod)$'
+```
+
+CloudKit matches with `grep -iE`, so you can test a pattern against your names the same way before relying on it:
+
+```bash
+pattern='(^|[-_.:/ ])(prod|production|prd|live)($|[-_.:/ 0-9])'
+for name in prod-admin live-eu staging; do
+  echo "$name" | grep -qiE "$pattern" && echo "$name: production" || echo "$name: not production"
+done
+```
+
+<Aside type="caution">
+With an invalid regular expression, `grep` prints an error such as `grep: Unmatched ( or \(` each time CloudKit checks a name, and CloudKit treats every name as not production. No banner or `[PROD]` marker is shown.
+</Aside>
+
+## Related
+
+- [Switch between environments](/guides/environments/) uses separate terminals and these markers to keep production apart.
+- [Configuration](/configuration/) lists `CLOUDKIT_PROD_PATTERN` and `CLOUDKIT_NO_PROMPT`.

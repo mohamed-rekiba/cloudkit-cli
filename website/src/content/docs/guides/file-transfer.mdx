@@ -1,0 +1,83 @@
+---
+title: Transfer files to and from instances
+description: Copy files to and from Compute Engine VMs with ck gce scp, and move files to EC2 instances through S3.
+---
+
+import { Aside, Steps } from '@astrojs/starlight/components';
+
+| | Compute Engine | EC2 |
+|---|---|---|
+| CloudKit command | [`ck gce scp`](/commands/gce/#ck-gce-scp) | None; use S3 (below) |
+| Upload and download | Yes | Through S3 |
+| Directories | Yes, with `-r` | Archive first, or `aws s3 cp --recursive` |
+| Transport | SCP over SSH, optionally through IAP | S3, with a shell from `ck ec2 session` |
+
+## Compute Engine: ck gce scp
+
+**Prerequisites:** a gcloud session and SSH access to the VM (see [Connect to a Compute Engine VM](/guides/connect-gce/#prerequisites)).
+
+Write remote paths as `<instance>:<path>`:
+
+```bash
+# Upload a file
+ck gce scp ./app.env my-vm:/tmp/app.env
+
+# Download a log
+ck gce scp my-vm:/var/log/syslog ./syslog
+
+# Upload a directory through IAP (no external IP needed)
+ck gce scp -r ./dist my-vm:/tmp/dist --tunnel-iap
+
+# Several sources into one remote directory
+ck gce scp ./a.txt ./b.txt my-vm:/tmp/
+```
+
+CloudKit looks up the zone from the remote path's instance name; add `--zone` to skip that. Files are written as your SSH user, so copy to a directory you can write (`/tmp` or your home), then move them with `sudo` in `ck gce ssh` if needed. Existing files are overwritten.
+
+## EC2: through S3
+
+CloudKit has no file transfer command for EC2. With SSM-managed instances, the usual route is an S3 bucket that both you and the instance can reach.
+
+**Prerequisites:**
+
+- An SSM-managed instance with the AWS CLI installed ([details](/guides/connect-ec2/#prerequisites)).
+- A bucket you can write to (`s3:PutObject`), and an instance role that can read from it (`s3:GetObject`). Reverse the permissions for downloads.
+
+<Steps>
+
+1. Upload the file from your machine:
+
+   ```bash
+   aws s3 cp ./build.tar.gz s3://my-bucket/transfer/build.tar.gz
+   ```
+
+2. Open a shell on the instance and download it:
+
+   ```bash
+   ck ec2 session i-0123456789abcdef0
+   aws s3 cp s3://my-bucket/transfer/build.tar.gz /tmp/build.tar.gz
+   ```
+
+3. Remove the object when you are done:
+
+   ```bash
+   aws s3 rm s3://my-bucket/transfer/build.tar.gz
+   ```
+
+</Steps>
+
+For the opposite direction, run `aws s3 cp` on the instance first, then on your machine.
+
+<Aside type="caution">
+Objects stay in the bucket until you delete them, and anyone with read access to the bucket can read them. Use a bucket with restricted access, and do not move secrets this way unless the bucket is encrypted and access is limited.
+</Aside>
+
+## Common failures
+
+| Symptom | Cause |
+|---|---|
+| `ck gce scp`: `Error: one of source/destination must be a remote path` | No argument looks like `instance:path`. Write the remote side as `my-vm:/path`. |
+| `scp: … Permission denied` (gce) | Your SSH user cannot write to the destination. Use `/tmp`. |
+| `AccessDenied` from `aws s3 cp` | Your identity or the instance role lacks access to the bucket. |
+
+See [File transfer fails](/troubleshooting/#file-transfer-fails).

@@ -1,0 +1,10 @@
+version: 2
+updates:
+  # Docs site dependencies, grouped into one monthly PR
+  - package-ecosystem: npm
+    directory: /website
+    schedule:
+      interval: monthly
+    groups:
+      docs:
+        patterns: ['*']

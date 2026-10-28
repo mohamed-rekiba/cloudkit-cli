@@ -1,0 +1,128 @@
+---
+title: Configuration
+description: Every environment variable that configures CloudKit and its installer, the variables CloudKit sets, and the native AWS and gcloud settings it reads.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+CloudKit has no configuration file. It is configured with a few environment variables, and otherwise uses your existing AWS and gcloud configuration.
+
+## Where to set variables
+
+Set CloudKit variables in your shell's rc file (`~/.zshrc` or `~/.bashrc`), **before** the CloudKit block, so they apply to every new terminal:
+
+```bash title="~/.zshrc"
+export CLOUDKIT_NO_PROMPT=1
+export CLOUDKIT_PROD_PATTERN='(^|[-_.:/ ])(prod|production|prd|live)($|[-_.:/ 0-9])'
+
+# >>> cloudkit >>>
+source "/home/you/.cloudkit/main.sh"
+# <<< cloudkit <<<
+```
+
+Exporting a variable in a terminal affects only that terminal and the programs it starts. The table below says when each variable is read, which tells you whether a change takes effect immediately.
+
+## CloudKit settings
+
+| Variable | Default | Read |
+|---|---|---|
+| [`CLOUDKIT_PROD_PATTERN`](#cloudkit_prod_pattern) | `prod`, `production` or `prd` as a separate word ([exact expression](/concepts/prompt-and-production/#production-detection)) | Each time a session table or prompt is drawn |
+| [`CLOUDKIT_NO_PROMPT`](#cloudkit_no_prompt) | unset | Each time the prompt would change |
+| [`CLOUDKIT_NO_CLEAR`](#cloudkit_no_clear) | unset | Each time a session table is printed |
+| [`CLOUDKIT_GCLOUD_GLOBAL`](#cloudkit_gcloud_global) | unset | When CloudKit loads in a new shell, and on `ck gcloud logout` |
+
+For the three on/off variables, any non-empty value turns the behavior on (`1` by convention). Unset the variable, or set it to an empty string, to turn it off.
+
+### `CLOUDKIT_PROD_PATTERN`
+
+An extended regular expression, matched case-insensitively with `grep -iE`, that marks a session as production. CloudKit checks the AWS profile name, and the gcloud configuration name and project ID. Matching sessions get a red **▲ PRODUCTION** banner in the session table and a `[PROD]` prompt marker.
+
+```bash
+export CLOUDKIT_PROD_PATTERN='^(main-account|acme-web-prod)$'
+```
+
+- An empty value uses the default.
+- An invalid expression makes `grep` print an error and disables detection.
+- Matching is on names only; account IDs are never checked.
+
+See [Prompt and production safety](/concepts/prompt-and-production/#production-detection) for examples of what the default matches, including `pre-prod` and `non-prod`.
+
+### `CLOUDKIT_NO_PROMPT`
+
+Stops CloudKit from changing `PROMPT` (zsh) or `PS1` (bash). Use it with prompt themes such as Starship or Powerlevel10k that display the cloud context themselves. Set it before logging in: a prefix that was already added stays until you log out of every session.
+
+```bash
+export CLOUDKIT_NO_PROMPT=1
+```
+
+### `CLOUDKIT_NO_CLEAR`
+
+Stops `ck aws login`, `ck aws switch`, `ck gcloud login`, `ck gcloud switch` and `ck setup gcloud` from clearing the screen and scrollback before printing the session table. Useful if you want to keep earlier output visible. The screen is never cleared when output is not a terminal (for example, when piped).
+
+```bash
+export CLOUDKIT_NO_CLEAR=1
+```
+
+### `CLOUDKIT_GCLOUD_GLOBAL`
+
+By default, each new terminal starts with **no** gcloud account (CloudKit exports an empty `CLOUDSDK_CORE_ACCOUNT`), the same way a terminal without `AWS_PROFILE` has no AWS profile. With this variable set, new terminals use gcloud's global active configuration instead, as if CloudKit were not installed, and `ck gcloud logout` returns to it.
+
+```bash
+export CLOUDKIT_GCLOUD_GLOBAL=1     # must come before the CloudKit block
+```
+
+It is read when CloudKit loads, so it only affects terminals opened after you set it. See [Google Cloud sessions](/sessions/#google-cloud-sessions).
+
+## Installer settings
+
+These are read by `install.sh` only.
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `CLOUDKIT_HOME` | `~/.cloudkit` | Install directory. `--dir` takes precedence. |
+| `CLOUDKIT_REPO_URL` | `https://github.com/shabayekdes/cloudkit-cli.git` | Git repository to clone and to read tags from. For forks and mirrors. |
+| `CLOUDKIT_ARCHIVE_URL` | `https://github.com/shabayekdes/cloudkit-cli/archive` | Tarball base URL, used when `git` is not installed. |
+| `CLOUDKIT_RELEASES_API` | GitHub "latest release" API URL | Where the latest version is looked up. Set it to an empty string to use the newest `v*` tag from `CLOUDKIT_REPO_URL` instead. |
+
+```bash
+CLOUDKIT_HOME=/opt/cloudkit bash install.sh --aws
+```
+
+## Variables CloudKit sets
+
+Session commands export these into the current terminal. You can read them in scripts and prompt themes; changing them by hand is not supported.
+
+| Variable | Set by | Cleared by |
+|---|---|---|
+| `AWS_PROFILE`, `AWS_DEFAULT_PROFILE`, `AWS_REGION`, `AWS_DEFAULT_REGION`, `AWS_ACCOUNT_ID` | `ck aws login`, `ck aws switch` | `ck aws logout` |
+| `CLOUDSDK_ACTIVE_CONFIG_NAME`, `GCLOUD_ACTIVE_CONFIG`, `GCLOUD_ACCOUNT`, `GCLOUD_PROJECT`, `GCLOUD_REGION` | `ck gcloud login`, `ck gcloud switch`, `ck setup gcloud` | `ck gcloud logout` |
+| `CLOUDSDK_CORE_ACCOUNT` (empty) | Shell start-up, `ck gcloud logout` | `ck gcloud login`, `ck gcloud switch` |
+| `ORG_PROMPT` | First prompt change (your original prompt) | Last logout |
+| `SPACESHIP_GCLOUD_SHOW` | While no gcloud account is selected | Restored on login |
+| `CLOUDKIT_DIR` | Shell start-up | Never |
+
+`AWS_*` and `CLOUDSDK_*` are standard variables that the AWS CLI, gcloud, SDKs and tools like Terraform read, which is what makes sessions apply to them too.
+
+## Native configuration CloudKit reads
+
+CloudKit does not replace native configuration; these settings belong to the AWS CLI and gcloud.
+
+| Setting | Used for |
+|---|---|
+| `~/.aws/config` | Profile lists for `ck aws login` / `switch`, credential type, chained profiles, `region`. Always this path. |
+| `CLOUDSDK_CONFIG` | gcloud's configuration directory (default `~/.config/gcloud`). Used by `ck status`, `ck doctor` and the ADC check. |
+| `GOOGLE_APPLICATION_CREDENTIALS` | ADC file shown in the session table and checked by `ck doctor`. |
+| gcloud configuration properties | `core/account`, `core/project`, `compute/region` for the picker and table. |
+
+<Aside type="caution" title="AWS_CONFIG_FILE is not supported">
+CloudKit reads profiles from `$HOME/.aws/config` directly. If you keep your AWS configuration elsewhere with `AWS_CONFIG_FILE`, `ck aws login` and `ck aws switch` will not see those profiles, although the `aws` commands they run would.
+</Aside>
+
+## Common mistakes
+
+| Mistake | Effect | Fix |
+|---|---|---|
+| Setting `CLOUDKIT_GCLOUD_GLOBAL` after the CloudKit block, or in a running terminal | No effect until the next new terminal | Move it above the block; open a new terminal |
+| Quoting the pattern with double quotes | `$` and `\` may be interpreted by the shell | Use single quotes around `CLOUDKIT_PROD_PATTERN` |
+| Setting `CLOUDKIT_NO_PROMPT=0` | Still disables the prompt (any non-empty value counts) | `unset CLOUDKIT_NO_PROMPT` |
+| Expecting `AWS_PROFILE=… ck aws login` to log in to that profile | `ck aws login` always asks | Pick the profile in the list |

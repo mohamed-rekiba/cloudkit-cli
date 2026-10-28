@@ -1,0 +1,99 @@
+---
+title: Connect to an EC2 instance
+description: Open a shell on an EC2 instance through AWS Systems Manager with ck ec2 session, without SSH keys, open ports or a public IP.
+---
+
+import { Aside, Steps } from '@astrojs/starlight/components';
+
+`ck ec2 session` opens a shell on an instance through AWS Systems Manager (SSM) Session Manager. Traffic goes over HTTPS from the SSM Agent on the instance to AWS, so the instance needs no inbound security group rule, no SSH key pair and no public IP.
+
+## Prerequisites
+
+**On your machine**
+
+- CloudKit with AWS dependencies: `ck doctor` shows `✓ aws` and `✓ session-manager-plugin`.
+- A profile for the account that owns the instance.
+
+**On the instance**
+
+- SSM Agent installed and running. It is preinstalled on Amazon Linux, recent Ubuntu Server and Windows Server AMIs from AWS.
+- An instance profile (IAM role) with the AWS managed policy `AmazonSSMManagedInstanceCore`, or equivalent.
+- Outbound HTTPS (443) to the Systems Manager endpoints, through a NAT gateway, an internet gateway, or VPC interface endpoints for `ssm`, `ssmmessages` and `ec2messages`.
+
+**Your permissions**
+
+- `ec2:DescribeInstances` for the picker.
+- `ssm:StartSession` on the instance and on the `SSM-SessionManagerRunShell` document, plus `ssm:TerminateSession` to end your sessions. See [Permissions](/reference/permissions/#ec2).
+
+## Steps
+
+<Steps>
+
+1. Start an AWS session for the account and region of the instance:
+
+   ```bash
+   ck aws login
+   ```
+
+   Check the `Region` row in the session table. The picker only shows instances in that region.
+
+2. Open a session, picking the instance from a list:
+
+   ```bash
+   ck ec2 session
+   ```
+
+   Type the number of the instance. If only one instance is running, CloudKit connects to it directly.
+
+   If you already know the instance ID, pass it:
+
+   ```bash
+   ck ec2 session i-0123456789abcdef0
+   ```
+
+3. You get a shell like `sh-5.2$` as the `ssm-user` account. Switch to your usual shell and user if needed:
+
+   ```bash
+   sudo su - ec2-user     # Amazon Linux; use ubuntu on Ubuntu
+   ```
+
+4. End the session with `exit` (or `exit` twice if you used `sudo su`).
+
+</Steps>
+
+## Expected result
+
+```text title="Output (illustrative)"
+Starting session with SessionId: jane@example.com-0a1b2c3d4e5f67890
+
+sh-5.2$
+```
+
+Session Manager can record sessions to S3 or CloudWatch Logs if your organization configures it, and administrators can see active sessions in the Systems Manager console.
+
+## Check whether an instance is SSM-managed
+
+Instances only work with Session Manager once they appear as managed nodes:
+
+```bash
+aws ssm describe-instance-information \
+  --filters "Key=InstanceIds,Values=i-0123456789abcdef0" \
+  --query 'InstanceInformationList[].{id:InstanceId,ping:PingStatus,agent:AgentVersion}'
+```
+
+An empty list means the instance is not registered with SSM. `PingStatus` should be `Online`. A newly attached instance role can take several minutes to take effect.
+
+## Common failures
+
+| Symptom | Likely cause |
+|---|---|
+| `TargetNotConnected` | The instance is not SSM-managed: agent stopped, role missing, or no route to the SSM endpoints. |
+| `SessionManagerPlugin is not found` | Install the Session Manager plugin, then `ck doctor`. |
+| `AccessDeniedException … ssm:StartSession` | Your role cannot start sessions on this instance or document. |
+| `No running instances found.` | No running instance in this region. Check the region with `ck status`. |
+
+See [SSM session fails to start](/troubleshooting/#ssm-session-fails-to-start) for diagnostics.
+
+<Aside type="tip" title="Next">
+To reach a service on the instance from your laptop instead of a shell, see [Forward a port](/guides/port-forwarding/).
+</Aside>

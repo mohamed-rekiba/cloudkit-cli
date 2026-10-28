@@ -1,0 +1,128 @@
+---
+title: Permissions
+description: The AWS IAM actions and Google Cloud IAM permissions each ck command needs, plus the instance, task and network requirements for SSM, ECS Exec and IAP.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+CloudKit runs `aws` and `gcloud` with your identity, so each command needs the permissions of the API calls it makes. This page lists them per command, derived from the native commands CloudKit runs (see [How CloudKit works](/concepts/how-it-works/#what-each-command-runs)).
+
+<Aside type="note">
+These are the minimum actions for the calls CloudKit makes. Your organization may add conditions (tags, MFA, IP ranges), service control policies, or permission boundaries that also apply. When a command fails with an access error, the native error message names the missing action.
+</Aside>
+
+## AWS
+
+### Sessions
+
+| Command | Needs |
+|---|---|
+| `ck aws login`, `switch` | `sts:GetCallerIdentity` (allowed for every identity). For SSO, an assignment to the account and permission set. For chained profiles, `sts:AssumeRole` on the role, and a trust policy on the role that allows your source identity. |
+| `ck setup aws` | Nothing in AWS beyond signing in. |
+
+### EC2
+
+| Command | IAM actions |
+|---|---|
+| `ck ec2 ls`, `ls-running`, `ls-stopped` | `ec2:DescribeInstances` |
+| `ck ec2 run` | `ec2:StartInstances`; for instances with KMS-encrypted EBS volumes, also `kms:CreateGrant` on the key |
+| `ck ec2 stop` | `ec2:StopInstances` |
+| `ck ec2 session` | `ec2:DescribeInstances` (picker); `ssm:StartSession` on the instance and on the `SSM-SessionManagerRunShell` document |
+| `ck ec2 port-forward` | `ssm:StartSession` on the instance and on the `AWS-StartPortForwardingSession` (no host) or `AWS-StartPortForwardingSessionToRemoteHost` (with host) document |
+
+For all SSM sessions, also allow `ssm:TerminateSession` (and `ssm:ResumeSession`) on your own sessions so they can be closed and resumed cleanly. If Session Manager is configured to encrypt sessions with KMS, you also need `kms:GenerateDataKey` on that key.
+
+**On the instance:** an instance profile with `AmazonSSMManagedInstanceCore` (or equivalent), a running SSM Agent, and outbound HTTPS to the `ssm`, `ssmmessages` and `ec2messages` endpoints.
+
+### ECS
+
+| Command | IAM actions |
+|---|---|
+| `ck ecs clusters` | `ecs:ListClusters` |
+| `ck ecs services` | `ecs:ListServices` |
+| `ck ecs tasks`, `service-tasks` | `ecs:ListTasks`, `ecs:DescribeTasks` |
+| `ck ecs task-info` | `ecs:DescribeTasks` |
+| `ck ecs logs` | `ecs:DescribeTasks`, `ecs:DescribeTaskDefinition`, `logs:GetLogEvents` on the log group |
+| `ck ecs describe` | `ecs:DescribeServices` |
+| `ck ecs exec` | `ecs:ExecuteCommand` on the task (and cluster) |
+| `ck ecs exec-running` | `ecs:ListTasks`, `ecs:ExecuteCommand` |
+| `ck ecs stop` | `ecs:StopTask` |
+
+**On the task (ECS Exec):** the task was started with `enableExecuteCommand`, and the **task role** allows `ssmmessages:CreateControlChannel`, `ssmmessages:CreateDataChannel`, `ssmmessages:OpenControlChannel` and `ssmmessages:OpenDataChannel`.
+
+### Example policy: read-only access plus shells
+
+A starting point for engineers who should inspect and connect, but not start or stop anything. Adapt resources and conditions to your environment.
+
+```json title="cloudkit-connect-policy.json"
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "Inspect",
+      "Effect": "Allow",
+      "Action": [
+        "ec2:DescribeInstances",
+        "ecs:ListClusters",
+        "ecs:ListServices",
+        "ecs:ListTasks",
+        "ecs:DescribeTasks",
+        "ecs:DescribeServices"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "Connect",
+      "Effect": "Allow",
+      "Action": ["ssm:StartSession", "ecs:ExecuteCommand"],
+      "Resource": [
+        "arn:aws:ec2:*:111111111111:instance/*",
+        "arn:aws:ecs:*:111111111111:task/*",
+        "arn:aws:ssm:*:111111111111:document/SSM-SessionManagerRunShell",
+        "arn:aws:ssm:*::document/AWS-StartPortForwardingSession",
+        "arn:aws:ssm:*::document/AWS-StartPortForwardingSessionToRemoteHost"
+      ]
+    },
+    {
+      "Sid": "OwnSessions",
+      "Effect": "Allow",
+      "Action": ["ssm:TerminateSession", "ssm:ResumeSession"],
+      "Resource": "arn:aws:ssm:*:*:session/${aws:userid}-*"
+    }
+  ]
+}
+```
+
+## Google Cloud
+
+### Compute Engine
+
+| Command | Permissions | Typical predefined role |
+|---|---|---|
+| `ck gce ls`, `ls-running`, `ls-stopped` | `compute.instances.list` | `roles/compute.viewer` |
+| Zone lookup (any instance command without `--zone`) | `compute.instances.list` | `roles/compute.viewer` |
+| `ck gce start`, `stop`, `reset` | `compute.instances.start`, `.stop`, `.reset` | `roles/compute.instanceAdmin.v1` |
+| `ck gce ssh`, `scp` | `compute.instances.get`, plus SSH access: OS Login roles, or permission to set instance or project metadata for SSH keys | `roles/compute.osLogin` or `roles/compute.osAdminLogin` (OS Login); `roles/compute.instanceAdmin.v1` (metadata keys) |
+| `--tunnel-iap`, `--forward`, `ck gce port-forward` | `iap.tunnelInstances.accessViaIAP` | `roles/iap.tunnelResourceAccessor` |
+
+If the VM runs as a service account, connecting over SSH can also require `iam.serviceAccounts.actAs` on it (`roles/iam.serviceAccountUser`).
+
+**Network for IAP:** an ingress firewall rule from `35.235.240.0/20` to TCP 22 (SSH, `scp`, `--forward`, `port-forward` with a host) or to the target port (`port-forward` without a host).
+
+```bash title="Example firewall rule (adapt network and targets)"
+gcloud compute firewall-rules create allow-iap-ssh \
+  --network default --direction INGRESS --action allow \
+  --rules tcp:22 --source-ranges 35.235.240.0/20
+```
+
+### Managed instance groups
+
+| Command | Permissions | Typical predefined role |
+|---|---|---|
+| `ck mig list` | `compute.instanceGroupManagers.list` | `roles/compute.viewer` |
+| `ck mig describe` | `compute.instanceGroupManagers.get` | `roles/compute.viewer` |
+| `ck mig restart`, `recreate` | `compute.instanceGroupManagers.update` | `roles/compute.instanceAdmin.v1` |
+
+### Sessions and setup
+
+`ck gcloud login`, `switch` and `ck setup gcloud` need no project permissions; they sign in and read local configuration.

@@ -1,14 +1,6 @@
 # shellcheck shell=bash
-# Resolve services dir when sourced (BASH_SOURCE is set when sourced)
-if [[ -n "${BASH_SOURCE[0]:-}" ]]; then
-  SERVICES_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
-else
-  SERVICES_DIR=$(cd "$(dirname "$0")" && pwd)
-fi
-export SERVICES_DIR
-
 # EC2 CLI function
-ec2() {
+_ck_ec2() {
   case "$1" in
     ls)
       # shellcheck disable=SC2016  # backticks are JMESPath literal syntax
@@ -34,17 +26,39 @@ ec2() {
       ;;
 
     session)
-      if [[ $# -lt 2 ]]; then
-        echo "Usage: ec2 session <instance-id>"
+      if [[ "$2" == "-h" || "$2" == "--help" ]]; then
+        echo "Usage: ck ec2 session [instance-id]"
+        echo "Omit the instance ID to pick from running instances."
         return 1
       fi
+
+      local instance_id="$2"
+      if [[ -z "$instance_id" ]]; then
+        local rows_file rc _name _az _ip
+        rows_file=$(mktemp)
+        # shellcheck disable=SC2016
+        aws ec2 describe-instances \
+          --filters Name=instance-state-name,Values=running \
+          --query 'Reservations[].Instances[].[InstanceId, Tags[?Key==`Name`]|[0].Value, Placement.AvailabilityZone, PrivateIpAddress]' \
+          --output text \
+          | awk -F'\t' -v OFS='|' '{ if ($2 == "None") $2 = "-"; $1 = $1; print }' > "$rows_file"
+
+        _ck_pick "Running EC2 instances" "Instance ID|Name|AZ|Private IP" "$rows_file"
+        rc=$?
+        rm -f "$rows_file"
+        if [[ $rc -ne 0 ]]; then
+          return 1
+        fi
+        IFS='|' read -r instance_id _name _az _ip <<< "$CK_PICKED"
+      fi
+
       aws ssm start-session \
-        --target "$2"
+        --target "$instance_id"
       ;;
 
     run)
       if [[ $# -lt 2 ]]; then
-        echo "Usage: ec2 run <instance-id>"
+        echo "Usage: ck ec2 run <instance-id>"
         return 1
       fi
       echo "Starting instance $2..."
@@ -56,7 +70,7 @@ ec2() {
 
     stop)
       if [[ $# -lt 2 ]]; then
-        echo "Usage: ec2 stop <instance-id>"
+        echo "Usage: ck ec2 stop <instance-id>"
         return 1
       fi
       echo "Stopping instance $2..."
@@ -68,14 +82,14 @@ ec2() {
 
     port-forward)
       if [[ $# -lt 4 ]]; then
-        echo "Usage: ec2 port-forward <remote-port> <local-port> <instance-id> [host]"
+        echo "Usage: ck ec2 port-forward <remote-port> <local-port> <instance-id> [host]"
         echo ""
         echo "Examples:"
         echo "  # Forward to EC2 instance itself (e.g., web server)"
-        echo "  ec2 port-forward 8080 8080 i-1234567890abcdef0"
+        echo "  ck ec2 port-forward 8080 8080 i-1234567890abcdef0"
         echo ""
         echo "  # Forward to remote service through EC2 (e.g., RDS)"
-        echo "  ec2 port-forward 3306 3306 i-1234567890abcdef0 mydb.123.us-west-2.rds.amazonaws.com"
+        echo "  ck ec2 port-forward 3306 3306 i-1234567890abcdef0 mydb.123.us-west-2.rds.amazonaws.com"
         return 1
       fi
       
@@ -101,51 +115,32 @@ ec2() {
       fi
       ;;
 
-    upload)
-      if [[ $# -lt 3 ]]; then
-        echo "Usage: ec2 upload <instance-id> <local-file> [remote-path] [port]"
-        echo ""
-        echo "Examples:"
-        echo "  ec2 upload i-1234567890abcdef0 /local/file.txt /home/ec2-user/file.txt 8888"
-        return 1
-      fi
-
-      local instance_id="$2"
-      local file_to_send="$3"
-      local remote_file_name="$4"
-      local port="$5"
-
-      "$SERVICES_DIR/_ec2_upload.sh" "$instance_id" "$file_to_send" "$remote_file_name" "$port"
-      ;;
-
     *)
       cat << 'EOF'
-Usage: ec2 <command> [options]
+Usage: ck ec2 <command> [options]
 
 Commands:
   ls                        List all EC2 instances
   ls-running                List only running EC2 instances
   ls-stopped                List only stopped EC2 instances
-  session <instance-id>     Start an SSM session to an instance
+  session [instance-id]     Start an SSM session (omit ID to pick a running instance)
   run <instance-id>         Start (run) an EC2 instance
   stop <instance-id>        Stop an EC2 instance
   port-forward <remote-port> <local-port> <instance-id> [host]
                             Forward a port to local machine
                             - Without host: forwards from EC2 instance itself
                             - With host: forwards from remote service through EC2
-  upload <instance-id> <local-file> [remote-path] [port]
-                            Upload a file to an instance via SSM
 
 Examples:
-  ec2 ls
-  ec2 ls-running
-  ec2 ls-stopped
-  ec2 session i-1234567890abcdef0
-  ec2 run i-1234567890abcdef0
-  ec2 stop i-1234567890abcdef0
-  ec2 port-forward 8080 8080 i-1234567890abcdef0
-  ec2 port-forward 3306 3306 i-1234567890abcdef0 mydb.123456789012.us-west-2.rds.amazonaws.com
-  ec2 upload i-1234567890abcdef0 /local/file.txt /home/ec2-user/file.txt 8888
+  ck ec2 ls
+  ck ec2 ls-running
+  ck ec2 ls-stopped
+  ck ec2 session
+  ck ec2 session i-1234567890abcdef0
+  ck ec2 run i-1234567890abcdef0
+  ck ec2 stop i-1234567890abcdef0
+  ck ec2 port-forward 8080 8080 i-1234567890abcdef0
+  ck ec2 port-forward 3306 3306 i-1234567890abcdef0 mydb.123456789012.us-west-2.rds.amazonaws.com
 EOF
       return 1
       ;;

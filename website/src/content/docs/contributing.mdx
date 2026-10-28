@@ -1,0 +1,131 @@
+---
+title: Contributing
+description: How to contribute code and documentation to CloudKit, the project layout, development setup, tests, and releasing.
+---
+
+import { FileTree, Steps } from '@astrojs/starlight/components';
+
+Contributions are welcome, including bug reports, fixes, new commands and documentation improvements.
+
+## Rules for pull requests
+
+1. **Open an issue first** for new features or behavior changes, so we can agree on the approach.
+2. **Branch from `main`** and open the pull request against `main`. Keep each PR focused on one change.
+3. **Use [Conventional Commits](https://www.conventionalcommits.org/)**, for example `feat(gce): add scp picker`, `fix(session): handle expired SSO token`, `docs(website): …`.
+4. **Support bash and zsh.** Everything sourced by `main.sh` runs in both shells: avoid bash-only syntax there (arrays, `read -p`, `${var,,}`), and guard globs that may not match.
+5. **Pass the checks** before pushing: `make ci` runs Shellcheck and every test. CI runs the same on every pull request. If you change `install.sh`, also run `make docker-shell SOURCE=local` to try a fresh install of your changes in Docker.
+6. **Add tests** in `test/` for new behavior. Tests must not need real cloud credentials or network access: stub `aws` / `gcloud` on `PATH` (see `test/test_install.sh`).
+7. **Keep the docs in sync.** When you add or change a command, update its `ck help` output and its page in `website/src/content/docs/commands/`. `make test` fails if a subcommand is missing from either.
+8. **Never commit secrets**: no account IDs, keys, tokens or real hostnames in code, tests or examples.
+
+## Development setup
+
+<Steps>
+
+1. Clone the repository and install from the clone, so your shell loads your working tree:
+
+   ```bash
+   git clone https://github.com/shabayekdes/cloudkit-cli.git
+   cd cloudkit-cli
+   ./install.sh --no-setup
+   ```
+
+2. After editing shell files, reload them in your terminal with `source ./main.sh`, or open a new terminal.
+
+3. Install Shellcheck (`brew install shellcheck` or `apt-get install shellcheck`) and run the checks:
+
+   ```bash
+   make shellcheck     # lint the Bash scripts
+   make test           # smoke, auth, install and docs tests
+   make ci             # both
+   ```
+
+</Steps>
+
+The tests source `test/isolate.sh` first, which unsets CloudKit's session variables and options, so running them from a terminal with an active `ck` session does not change the results.
+
+### Fresh-install testing
+
+```bash
+make docker-shell                 # fresh Linux machine with the latest release installed
+make docker-shell SOURCE=local    # same, with your working tree (uncommitted changes included)
+make docker-fresh                 # empty machine: run the installer yourself
+```
+
+`DEPS=aws|gcp|core`, `BASE_IMAGE=debian:12` and `USER_SHELL=/bin/zsh` change the machine. See `docker/README.md` in the repository.
+
+## Project layout
+
+<FileTree>
+- install.sh installer: dependencies, rc block, upgrade, uninstall
+- main.sh entry point that loads everything behind `ck`
+- ck.sh `ck` dispatcher, `ck status`, `ck help`, `ck version`
+- session.sh AWS and gcloud login/switch/logout, session tables, prompt, production detection
+- services/
+  - ec2.sh `ck ec2`
+  - ecs.sh `ck ecs`
+  - gce.sh `ck gce`
+  - gce_ig.sh `ck mig`
+  - setup.sh `ck setup`, `ck doctor`
+  - _picker.sh shared numbered instance picker
+- test/ smoke, auth, install and docs tests (`make test`)
+- docker/ fresh-install testing (`make docker-shell`)
+- scripts/release.sh tag and publish a release (`make release`)
+- website/ this documentation site
+</FileTree>
+
+## Documentation
+
+The site uses [Starlight](https://starlight.astro.build) (Astro) and lives in `website/`. It needs Node.js.
+
+```bash
+make docs-serve      # live preview at http://localhost:4321
+make docs-build      # production build into website/dist (fails on broken internal links)
+```
+
+Merges to `main` that touch `website/` are built and deployed to Cloudflare Pages by `.github/workflows/docs.yml`. Pull requests are built but not deployed.
+
+### Proposing a documentation change
+
+- For small fixes, use the **Edit page** link at the bottom of any page; it opens the source file on GitHub.
+- For larger changes, edit the files under `website/src/content/docs/` in a branch and run `make docs-build` before opening a pull request.
+- Report inaccurate documentation as an issue, quoting the page and what the command actually does.
+
+### How the docs are organized
+
+| Directory | Contents |
+|---|---|
+| `start/`, `getting-started.mdx` | Installation and first steps |
+| `concepts/`, `sessions.mdx` | How CloudKit works, explained once |
+| `guides/` | Task-oriented walkthroughs |
+| `commands/` | The canonical command reference, one page per command family |
+| `reference/`, `configuration.mdx`, `troubleshooting.mdx` | Lookup material |
+
+Each command has exactly one canonical description, in `commands/`. Other pages link to it instead of repeating arguments.
+
+### Writing a command reference entry
+
+`test/test_docs.sh` requires a `## ck <family> <subcommand>` heading for every subcommand, on the page for its family (`commands/ec2.mdx` for `ck ec2`, and so on). Each entry follows the same order:
+
+1. One or two sentences on what the command does and when to use it.
+2. A `<CommandFacts>` block (from `website/src/components/CommandFacts.astro`) with the effect, the native commands it runs, and what it needs.
+3. The syntax in a `text` code block, then an argument table.
+4. Examples, then output labeled `(illustrative)` unless it is copied from a real run with sanitized values.
+5. Cautions (`<Aside type="caution">` or `type="danger"` for commands that change or interrupt resources), then related links.
+
+Document what the code does, not what it should do. Verify every option against the source in `services/` and `session.sh`. If you find a bug, document the current behavior, add it to `reference/limitations.mdx`, and open an issue.
+
+Use the placeholders listed on the [command overview](/commands/#placeholders-used-in-these-docs) so examples stay consistent and never contain real identifiers.
+
+## Releasing (maintainers)
+
+```bash
+make release VERSION=v3 DRY_RUN=1    # check everything, publish nothing
+make release VERSION=v3              # tag main, push, publish the GitHub release
+```
+
+The release is marked latest and carries `install.sh`, so the quick-install URL serves it right away. It needs an authenticated [`gh`](https://cli.github.com) and a clean, up-to-date `main`.
+
+## Security issues
+
+Do not report security vulnerabilities in public issues. Follow the contact instructions in the **Security Vulnerabilities** section of the repository's `README.md`.

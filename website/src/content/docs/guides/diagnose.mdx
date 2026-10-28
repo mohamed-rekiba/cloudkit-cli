@@ -1,0 +1,89 @@
+---
+title: Diagnose an installation or authentication failure
+description: A step-by-step procedure to find out whether a failing ck command is caused by the installation, the session, credentials, permissions or the network.
+---
+
+import { Aside, Steps } from '@astrojs/starlight/components';
+
+When a `ck` command fails, the cause is almost always in one of five layers. Work through them in order; each step rules one out.
+
+```text
+1. CloudKit loaded?        ck version
+2. Tools installed?        ck doctor
+3. Session selected?       ck status
+4. Credentials valid?      aws sts get-caller-identity / gcloud auth print-access-token
+5. Permission / network?   the native error message
+```
+
+## Steps
+
+<Steps>
+
+1. **Is CloudKit loaded in this terminal?**
+
+   ```bash
+   ck version
+   ```
+
+   - `ck: command not found`: the rc file has not been loaded. Open a new terminal or run `exec "$SHELL"`. If it persists, check that your rc file contains the CloudKit block: `grep -n cloudkit ~/.zshrc ~/.bashrc`. See [`ck: command not found`](/troubleshooting/#ck-command-not-found).
+   - `CloudKit unknown`: CloudKit is loaded from a directory without version information. This is harmless.
+
+2. **Are the required tools installed?**
+
+   ```bash
+   ck doctor
+   echo $?
+   ```
+
+   Fix every `✗` line using the hint it prints, then run `ck doctor` again until the exit status is `0`. `ck doctor` does not contact AWS or Google Cloud, so a clean result does not prove that credentials work.
+
+3. **Does this terminal have a session?**
+
+   ```bash
+   ck status
+   ```
+
+   - `not logged in`: run `ck aws login` or `ck gcloud login`. Sessions are per terminal, so a new terminal always starts here.
+   - Wrong profile, account, region or project: `ck aws switch` / `ck gcloud switch`.
+
+4. **Do the credentials work?** Ask the cloud directly, without CloudKit:
+
+   ```bash
+   aws sts get-caller-identity
+   gcloud auth print-access-token > /dev/null && echo gcloud OK
+   ```
+
+   | Error | Meaning | Fix |
+   |---|---|---|
+   | `The SSO session associated with this profile has expired` / `Token has expired` | SSO token expired | `ck aws login` |
+   | `Unable to locate credentials` | No credentials for `AWS_PROFILE` | `ck aws switch`, check `~/.aws/credentials` |
+   | `The config profile (…) could not be found` | `AWS_PROFILE` names a missing profile | `ck aws logout`, then log in again |
+   | `You must specify a region` / invalid region | Profile has no `region` | Add `region` to the profile |
+   | `You do not currently have an active account selected` | No gcloud session in this terminal | `ck gcloud login` |
+   | `Reauthentication failed` / `invalid_grant` | gcloud login expired or revoked | `ck gcloud login --reauth` |
+
+5. **Is it a permission or network problem?** Re-run the failing `ck` command and read the native error:
+
+   | Error contains | Layer | Next step |
+   |---|---|---|
+   | `AccessDenied`, `UnauthorizedOperation`, `not authorized to perform` | AWS IAM | Ask for the action named in the message. See [Permissions](/reference/permissions/). |
+   | `PERMISSION_DENIED`, `Required '…' permission` | Google Cloud IAM | Ask for the permission or role named in the message. |
+   | `TargetNotConnected`, `failed to connect to backend`, `Connection timed out` | Network / agent | See the SSM and IAP sections of [Troubleshooting](/troubleshooting/). |
+
+</Steps>
+
+## Verify the fix
+
+Run the original command again. For session problems, also confirm the table that `ck aws login` or `ck gcloud login` prints shows the expected account and project.
+
+## Collecting information for an issue
+
+If you still need help, [open an issue](https://github.com/shabayekdes/cloudkit-cli/issues) with:
+
+- `ck version` and `ck doctor` output.
+- Your OS and shell (`uname -a`, `echo $SHELL`).
+- The exact command and the error, with identifiers removed.
+
+<Aside type="danger" title="Remove sensitive data">
+Before posting, replace account IDs, email addresses, host names, IP addresses, instance and project names with placeholders. Never include access keys, tokens, SSO cache files, `~/.aws/credentials` or gcloud credential files.
+</Aside>

@@ -1,0 +1,159 @@
+---
+title: Forward a port and reach a private database
+description: Forward a local port to a service on an instance, or to a private RDS or Cloud SQL database through an instance, using SSM on AWS or IAP on Google Cloud.
+---
+
+import { Aside, Steps, Tabs, TabItem } from '@astrojs/starlight/components';
+
+Databases and internal services usually live in private subnets with no public access. A **bastion** instance that can reach them, plus a tunnel from your laptop to that instance, lets local tools such as `psql`, `mysql` or a database GUI connect to `localhost` as if the database were local.
+
+```text
+AWS:          localhost:5433 ──SSM──▶ EC2 instance ──▶ mydb.example.internal:5432
+Google Cloud: localhost:3308 ──IAP──▶ VM ──▶ 10.20.0.5:3306 (Cloud SQL private IP)
+```
+
+Both `ck ec2 port-forward` and `ck gce port-forward` take the same arguments:
+
+```text
+<remote-port> <local-port> <instance> [host]
+```
+
+Leave out `host` to reach a port on the instance itself.
+
+## Prerequisites
+
+<Tabs syncKey="cloud">
+<TabItem label="AWS">
+
+- An SSM-managed instance in a subnet that can reach the database. See [Connect to an EC2 instance](/guides/connect-ec2/#prerequisites).
+- The database's security group allows inbound traffic **from the instance** (its security group or private IP) on the database port.
+- `ssm:StartSession` on the instance and on the `AWS-StartPortForwardingSession` / `AWS-StartPortForwardingSessionToRemoteHost` documents.
+- Database credentials. They are not provided by the tunnel.
+
+</TabItem>
+<TabItem label="Google Cloud">
+
+- A VM in a network that can reach the database (for Cloud SQL, a private IP in the same or a peered VPC).
+- `roles/iap.tunnelResourceAccessor` and an ingress firewall rule from `35.235.240.0/20`: to TCP 22 when forwarding through the VM to a host, or to the target port when forwarding to the VM itself.
+- SSH access to the VM when you pass a `host` (CloudKit uses SSH port forwarding for that form).
+- Database credentials.
+
+</TabItem>
+</Tabs>
+
+## Steps
+
+<Tabs syncKey="cloud">
+<TabItem label="AWS">
+
+<Steps>
+
+1. Start a session and find a bastion instance:
+
+   ```bash
+   ck aws login
+   ck ec2 ls-running
+   ```
+
+2. Find the database endpoint, for RDS:
+
+   ```bash
+   aws rds describe-db-instances --query 'DBInstances[].[DBInstanceIdentifier,Endpoint.Address,Endpoint.Port]' --output table
+   ```
+
+3. Open the tunnel. This maps `localhost:5433` to the database's port `5432`:
+
+   ```bash
+   ck ec2 port-forward 5432 5433 i-0123456789abcdef0 mydb.example.internal
+   ```
+
+   Wait for `Waiting for connections...`. Leave this terminal open.
+
+4. In a second terminal, connect to `localhost`:
+
+   ```bash
+   psql "host=localhost port=5433 user=app dbname=app"
+   ```
+
+5. Close the tunnel with `Ctrl+C` in the first terminal.
+
+</Steps>
+
+</TabItem>
+<TabItem label="Google Cloud">
+
+<Steps>
+
+1. Start a session and find a VM in the database's network:
+
+   ```bash
+   ck gcloud login
+   ck gce ls-running
+   ```
+
+2. Find the Cloud SQL private IP:
+
+   ```bash
+   gcloud sql instances describe my-db --format='value(ipAddresses)'
+   ```
+
+3. Open the tunnel. This maps `localhost:3308` to port `3306` on the database:
+
+   ```bash
+   ck gce port-forward 3306 3308 my-vm 10.20.0.5
+   ```
+
+   Leave this terminal open.
+
+4. In a second terminal, connect to `localhost`:
+
+   ```bash
+   mysql -h 127.0.0.1 -P 3308 -u app -p
+   ```
+
+5. Close the tunnel with `Ctrl+C` in the first terminal.
+
+</Steps>
+
+</TabItem>
+</Tabs>
+
+<Aside type="tip" title="Pick a free local port">
+Use a local port that differs from the remote one (`5433` instead of `5432`) so the tunnel does not collide with a database running on your laptop. Check what is listening with `lsof -iTCP:5433 -sTCP:LISTEN`.
+</Aside>
+
+## A service on the instance itself
+
+Leave out `host`:
+
+```bash
+ck ec2 port-forward 80 8080 i-0123456789abcdef0      # http://localhost:8080
+ck gce port-forward 8080 8080 my-vm                  # IAP TCP tunnel, no SSH involved
+```
+
+## Several forwards at once on Google Cloud
+
+`ck gce ssh --forward` opens multiple SSH forwards in one connection, to services as seen from the VM:
+
+```bash
+ck gce ssh my-vm --forward 3308:127.0.0.1:3306 --forward 6380:127.0.0.1:6379 --tunnel-only
+```
+
+`--forward` connects through IAP automatically; `--tunnel-only` holds the tunnels open without a shell. On AWS, run one `ck ec2 port-forward` per port, each in its own terminal.
+
+## Security notes
+
+- The tunnel listens on `localhost` only, but any local process can use it while it is open. Close it when you are done.
+- The tunnel carries whatever the database protocol sends. Use TLS to the database where it is supported.
+- Opening a tunnel is an access event: SSM sessions and IAP tunnels can be logged by your organization.
+
+## Common failures
+
+| Symptom | Likely cause |
+|---|---|
+| Client hangs or `Connection refused` through an open AWS tunnel | The database security group does not allow the instance, or the host name is wrong. Test from the instance with `ck ec2 session` and `nc -vz <host> <port>`. |
+| Plugin cannot listen on the port / `address already in use` | The local port is taken. Pick another. |
+| `failed to connect to backend` (Google Cloud) | Missing IAP firewall rule for the port. |
+| Tunnel drops after a while | Idle timeouts in Session Manager or IAP. Re-run the command. |
+
+See [Port forward fails](/troubleshooting/#port-forward-fails-or-the-local-port-is-busy).

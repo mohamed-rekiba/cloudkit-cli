@@ -1,0 +1,126 @@
+---
+title: Inspect ECS services and run commands in containers
+description: Find ECS clusters, services and tasks with CloudKit, then open a shell or run a one-off command in a running container with ECS Exec.
+---
+
+import { Aside, Steps } from '@astrojs/starlight/components';
+
+This guide walks from "which cluster is it in?" to a shell inside a running container. It works for tasks on Fargate and on EC2 capacity.
+
+## Prerequisites
+
+- An AWS session (`ck aws login`) in the account and region of the cluster.
+- The Session Manager plugin (`ck doctor` shows `✓ session-manager-plugin`) for the exec steps.
+- Read permissions: `ecs:ListClusters`, `ecs:ListServices`, `ecs:ListTasks`, `ecs:DescribeTasks`, `ecs:DescribeServices`.
+- For exec: `ecs:ExecuteCommand` on the task. See [Permissions](/reference/permissions/#ecs).
+
+### Prerequisites for ECS Exec
+
+ECS Exec must be enabled when a task starts; it cannot be turned on for a running task.
+
+| Requirement | How to check or fix |
+|---|---|
+| `enableExecuteCommand` on the service or task | `aws ecs describe-tasks --cluster my-cluster --tasks <task-id> --query 'tasks[0].enableExecuteCommand'` should print `true`. Fix with `aws ecs update-service --cluster my-cluster --service my-service --enable-execute-command --force-new-deployment`, which **replaces the service's tasks**. |
+| Task role with SSM channel permissions | The **task role** (not the execution role) needs `ssmmessages:CreateControlChannel`, `ssmmessages:CreateDataChannel`, `ssmmessages:OpenControlChannel` and `ssmmessages:OpenDataChannel`. |
+| Network path to SSM | Tasks in private subnets need a NAT gateway or a VPC endpoint for `ssmmessages`. |
+| The command exists in the image | Minimal images often have `/bin/sh` but not `/bin/bash`. |
+
+## Steps
+
+<Steps>
+
+1. Find the cluster and service:
+
+   ```bash
+   ck ecs clusters
+   ck ecs services my-cluster
+   ```
+
+2. Check the service's health: running count against desired count, and the task definition revision.
+
+   ```bash
+   ck ecs describe my-cluster my-service
+   ```
+
+3. List the service's tasks with their uptime:
+
+   ```bash
+   ck ecs service-tasks my-cluster my-service
+   ```
+
+   ```text
+   TASK ID                                  LAST STATUS     DESIRED STATUS  CONTAINER                 UPTIME
+   ==============================================================================================================
+   0123456789abcdef0123456789abcdef         RUNNING         RUNNING         app                       2d 4h
+   ```
+
+   A task that keeps showing a few minutes of uptime is probably crash-looping.
+
+4. Look at one task's image and creation time:
+
+   ```bash
+   ck ecs task-info my-cluster 0123456789abcdef0123456789abcdef
+   ```
+
+5. Open a shell in its container:
+
+   ```bash
+   ck ecs exec my-cluster 0123456789abcdef0123456789abcdef app
+   ```
+
+   Without a command, CloudKit runs `/bin/bash`. Use `sh` for images without bash:
+
+   ```bash
+   ck ecs exec my-cluster 0123456789abcdef0123456789abcdef app sh
+   ```
+
+6. Leave with `exit`.
+
+</Steps>
+
+## Expected result
+
+```text title="Output (illustrative)"
+The Session Manager plugin was installed successfully. Use the AWS CLI to start a session.
+
+Starting session with SessionId: ecs-execute-command-0a1b2c3d4e5f67890
+root@ip-10-0-1-12:/app#
+```
+
+## Run a one-off command in any replica
+
+When any running task of a service will do, skip looking up the task ID:
+
+```bash
+ck ecs exec-running my-cluster app --service my-service php artisan migrate:status
+```
+
+`exec-running` uses the first task that `aws ecs list-tasks` returns. Always pass `--service` in clusters that run several services, or the chosen task may not have a container named `app`.
+
+<Aside type="caution" title="Commands run in production containers">
+Commands you run through ECS Exec execute inside the live container with its credentials and network access. If ECS Exec logging is enabled, commands and output are recorded to S3 or CloudWatch Logs.
+</Aside>
+
+## Logs
+
+For containers that use the `awslogs` log driver, print a task's most recent log lines:
+
+```bash
+ck ecs logs my-cluster 0123456789abcdef0123456789abcdef --tail 100
+```
+
+Add `--container <name>` when the first container is a sidecar. To follow new output live, use the AWS CLI with the log group that `ck ecs logs` prints:
+
+```bash
+aws logs tail /ecs/my-service --follow --since 15m
+```
+
+## Common failures
+
+| Message | Cause |
+|---|---|
+| `The execute command failed because execute command was not enabled when the task was run` | Enable ECS Exec on the service and start new tasks. |
+| `TargetNotConnectedException` | The task's SSM agent cannot reach AWS: task role permissions or network path. |
+| `Unable to start command: Failed to start pty: fork/exec /bin/bash: no such file or directory` | The image has no bash. Pass `sh`. |
+
+See [ECS Exec fails](/troubleshooting/#ecs-exec-fails).

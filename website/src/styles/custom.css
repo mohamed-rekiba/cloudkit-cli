@@ -1,0 +1,70 @@
+/* CloudKit theme: indigo/blue accent from the logo, orange reserved for highlights. */
+
+:root {
+	--sl-color-accent-low: #1e1b4b;
+	--sl-color-accent: #6366f1;
+	--sl-color-accent-high: #c7d2fe;
+	--ck-orange: #ffb547;
+	--ck-facts-bg: var(--sl-color-gray-6);
+	--sl-content-width: 48rem;
+}
+
+:root[data-theme='light'] {
+	--sl-color-accent-low: #e0e7ff;
+	--sl-color-accent: #4f46e5;
+	--sl-color-accent-high: #312e81;
+	--ck-orange: #b45309;
+	--ck-facts-bg: var(--sl-color-gray-7);
+}
+
+/* Headings: tighter rhythm, clearer separation between command sections. */
+.sl-markdown-content .sl-heading-wrapper.level-h2 {
+	padding-top: 1rem;
+	border-top: 1px solid var(--sl-color-hairline);
+}
+.sl-markdown-content .sl-heading-wrapper.level-h2:first-child {
+	border-top: none;
+	padding-top: 0;
+}
+.sl-markdown-content h2 code,
+.sl-markdown-content h3 code {
+	font-size: 0.9em;
+}
+
+/* Tables: full width, readable on small screens. */
+.sl-markdown-content table {
+	display: table;
+	width: 100%;
+	font-size: var(--sl-text-sm);
+}
+@media (max-width: 50rem) {
+	.sl-markdown-content table {
+		display: block;
+		overflow-x: auto;
+	}
+}
+.sl-markdown-content th {
+	white-space: nowrap;
+}
+.sl-markdown-content td code {
+	white-space: nowrap;
+}
+
+/* Keyboard focus that is visible in both themes. */
+:where(a, button, summary, [tabindex]):focus-visible {
+	outline: 2px solid var(--sl-color-accent);
+	outline-offset: 2px;
+	border-radius: 2px;
+}
+
+/* Splash page */
+.hero .tagline code {
+	color: var(--ck-orange);
+	background: none;
+	font-size: 1em;
+}
+.ck-lede {
+	font-size: var(--sl-text-lg);
+	color: var(--sl-color-gray-2);
+	max-width: 44rem;
+}

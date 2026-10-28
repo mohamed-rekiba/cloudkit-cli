@@ -1,0 +1,146 @@
+---
+title: ck setup and ck doctor
+description: Reference for ck setup (guided AWS profile and gcloud configuration setup) and ck doctor (dependency and configuration checks).
+sidebar:
+  label: ck setup / ck doctor
+  order: 7
+tableOfContents:
+  maxHeadingLevel: 2
+---
+
+import { Aside } from '@astrojs/starlight/components';
+import CommandFacts from '../../../components/CommandFacts.astro';
+
+`ck setup` creates credentials configuration with the native CLIs' own commands, and `ck doctor` checks that the tools CloudKit needs are installed. Both are safe to run on a machine that is already configured.
+
+## ck setup
+
+Guided setup for AWS, Google Cloud, or both.
+
+```text
+ck setup [aws | gcloud | gcp]
+```
+
+| Argument | Description |
+|---|---|
+| `aws` | Run [`ck setup aws`](#ck-setup-aws). |
+| `gcloud`, `gcp` | Run [`ck setup gcloud`](#ck-setup-gcloud). |
+| (none) | Ask: `1) AWS`, `2) Google Cloud`, `3) Both` (default `3`). |
+| `-h`, `--help`, `help` | Show usage. |
+
+The installer offers `ck setup` at the end of an install. Prompts show a default in brackets; press Enter to accept it.
+
+## ck setup aws
+
+Add an AWS profile to `~/.aws/config`.
+
+<CommandFacts
+	effect="local"
+	runs={['aws configure sso', 'aws configure --profile <name>', 'aws configure set …', 'aws configure list-profiles']}
+	needs="aws (CLI v2)"
+/>
+
+```text
+ck setup aws
+```
+
+Choose one of:
+
+| Option | What happens | Written to |
+|---|---|---|
+| `1` AWS SSO / IAM Identity Center (default) | Runs `aws configure sso`, which asks for the SSO start URL, SSO region, account, role and profile name, and signs you in. | `~/.aws/config` |
+| `2` Access keys (IAM user) | Asks for a profile name (letters, digits, `.`, `_`, `-`; default `default`), then runs `aws configure --profile <name>` for the keys, region and output format. | `~/.aws/credentials` and `~/.aws/config` |
+| `3` Role assumed from an existing profile | Lists existing profiles; asks for the source profile, a role ARN (`arn:aws:iam::<12-digit account>:role/<name>`), a new profile name (default: the role name) and a region (default: the source profile's region). | `~/.aws/config` (`role_arn`, `source_profile`, `region`) |
+
+Then it prints `AWS profile saved to ~/.aws/config.` and offers to run [`ck aws login`](/commands/aws/#ck-aws-login).
+
+<Aside type="caution" title="Access keys">
+Long-lived access keys are stored in plain text in `~/.aws/credentials`. Prefer SSO where your organization supports it, and never paste keys into issues, chat or documentation.
+</Aside>
+
+Profiles created with option 2 or 3 do not appear in `ck aws login`, which lists SSO profiles only. Use [`ck aws switch`](/commands/aws/#ck-aws-switch) for them, or log in to the source profile and accept the chained profile.
+
+## ck setup gcloud
+
+Create or update a gcloud configuration and log in.
+
+<CommandFacts
+	effect="local"
+	runs={['gcloud config configurations create --no-activate', 'gcloud config set', 'gcloud auth login', 'gcloud auth application-default login (optional)']}
+	needs="gcloud"
+/>
+
+```text
+ck setup gcloud
+```
+
+Prompts, in order:
+
+| Prompt | Notes |
+|---|---|
+| Configuration name | Lowercase letters, digits and `-`, starting with a letter. If it exists, CloudKit asks whether to update it and uses its current values as defaults. |
+| Google account email | Leave empty to choose the account in the browser. |
+| Project ID | Optional. |
+| Default region | Default `us-central1`. Written to `compute/region`. |
+| Default zone | Default `<region>-a`. Written to `compute/zone`. |
+| Log in again? | Only asked when the account already has credentials (default no). |
+| Also set Application Default Credentials? | Default no. Runs `gcloud auth application-default login`, which replaces the machine-wide ADC file. |
+| Start a session with it now? | Default yes. Same as `ck gcloud switch` to this configuration. |
+
+All `gcloud` calls are pinned to the configuration being set up, so neither gcloud's global active configuration nor other terminals change.
+
+## ck doctor
+
+Check that CloudKit's dependencies are installed and that AWS and gcloud are configured.
+
+<CommandFacts effect="read" runs={['local checks', 'aws configure list-profiles', '<tool> --version']} needs="Nothing" />
+
+```text
+ck doctor
+```
+
+Takes no arguments. Returns `0` when no required tool is missing, `1` otherwise, so it can be used in scripts.
+
+```text title="Output on a machine with tools but no credentials yet"
+━━━ CloudKit Doctor ━━━
+CloudKit v2.0.2 (/home/you/.cloudkit)
+
+Common
+  ✓ jq                       jq-1.8.1
+  ✓ python3                  Python 3.14.4
+
+AWS
+  ✓ aws                      aws-cli/2.38.5
+  ✓ session-manager-plugin   1.2.896.0
+  ! profiles                 none — run: ck setup aws
+
+Google Cloud
+  ✓ gcloud                   Google Cloud SDK 590.0.1
+  ! configurations           none — run: ck setup gcloud
+  ! ADC                      not set (optional) — gcloud auth application-default login
+
+Shell
+  ✓ rc file                  loaded from /home/you/.zshrc
+
+All required tools are installed.
+```
+
+`✓` is fine, `!` is a warning that does not affect the exit status, and `✗` is a missing required tool.
+
+### What it checks
+
+| Section | Check | `✗` (required) when | `!` (warning) when |
+|---|---|---|---|
+| Common | `jq`, `python3` | Missing | |
+| AWS | `aws` | Missing while `~/.aws/config` exists, or not version 2 | Missing and no AWS config (AWS not in use) |
+| AWS | `session-manager-plugin` | Missing while AWS is in use | Missing and AWS not in use |
+| AWS | profiles | | `aws configure list-profiles` returns none |
+| Google Cloud | `gcloud` | Missing while gcloud configurations exist | Missing and gcloud not in use |
+| Google Cloud | configurations, ADC | | None found / no ADC file and no `GOOGLE_APPLICATION_CREDENTIALS` |
+| Shell | rc file | | `~/.zshrc`, `~/.bashrc` and `~/.bash_profile` don't source CloudKit |
+
+A cloud counts as "in use" when its CLI is installed or its configuration exists. When neither cloud is in use, `ck doctor` suggests installing one with the installer's `--aws` or `--gcp` option.
+
+### What it does not check
+
+`ck doctor` makes no calls to AWS or Google Cloud. It does not test whether credentials are valid or expired, whether you have IAM permissions, whether instances are SSM-managed, or whether firewall rules allow IAP. For those, see [Diagnose an installation or authentication failure](/guides/diagnose/).

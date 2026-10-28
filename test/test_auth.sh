@@ -8,6 +8,12 @@
 
 _test_sh_dir="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 REPO_ROOT="$(cd "$_test_sh_dir/.." && pwd)"
+# shellcheck source=test/isolate.sh
+source "$_test_sh_dir/isolate.sh"
+
+# Keep tests away from the real gcloud config (sourcing session.sh may create ck-none)
+CLOUDSDK_CONFIG="$(mktemp -d)"
+export CLOUDSDK_CONFIG
 
 set -euo pipefail
 
@@ -90,7 +96,7 @@ summary() {
 }
 
 # ---------------------------------------------------------------------------
-# Source the module under test (without executing aws_session / aws_logout)
+# Source the module under test (without executing _ck_aws_login / _ck_aws_logout)
 # ---------------------------------------------------------------------------
 
 # We source session.sh in a subshell per test group to avoid state leakage.
@@ -225,15 +231,76 @@ assert_output_not_contains \
     "warning" "$warn_no_expiry"
 
 # ---------------------------------------------------------------------------
-# Story 3 — aws_logout: env var cleanup and prompt restore
+# GCloud token expiry: _gcloud_token_status / _gcloud_warn_if_expiring_soon
 # ---------------------------------------------------------------------------
 
 echo ""
-echo "=== Story 3: aws_logout ==="
+echo "=== GCloud token expiry ==="
+
+# Run _gcloud_token_status against a mocked `gcloud auth describe`.
+# $1 = JSON fragment merged into the mocked credential.
+_run_gcloud_status() {
+    local extra="$1"
+    bash -c "
+source '$SESSION_SH' 2>/dev/null
+gcloud() {
+    if [[ \"\$*\" == *'auth describe'* ]]; then
+        echo '{\"expiry\": \"10-20-2026 23:10:55\", \"token\": \"ya29.SECRET-ACCESS-TOKEN\", $extra}'
+        return 0
+    fi
+    return 1
+}
+_gcloud_token_status 'user@example.com'
+"
+}
+
+status_refresh=$(_run_gcloud_status '"type": "authorized_user", "refresh_token": "1//SECRET-REFRESH-TOKEN"' 2>/dev/null || echo "")
+status_no_refresh=$(_run_gcloud_status '"type": "authorized_user"' 2>/dev/null || echo "")
+status_sa=$(_run_gcloud_status '"type": "service_account"' 2>/dev/null || echo "")
+
+assert_eq "_gcloud_token_status parses expiry and refresh token" \
+    "1792537855|true|2026-10-20 23:10 UTC" "$status_refresh"
+assert_eq "_gcloud_token_status reports no refresh without a refresh token" \
+    "1792537855|false|2026-10-20 23:10 UTC" "$status_no_refresh"
+assert_eq "_gcloud_token_status treats service accounts as refreshable" \
+    "1792537855|true|2026-10-20 23:10 UTC" "$status_sa"
+assert_output_not_contains "_gcloud_token_status does not print the access token" \
+    "SECRET-ACCESS-TOKEN" "$status_refresh"
+assert_output_not_contains "_gcloud_token_status does not print the refresh token" \
+    "SECRET-REFRESH-TOKEN" "$status_refresh"
+
+_run_gcloud_warn() {
+    local seconds_ahead="$1" can_refresh="$2"
+    bash -c "
+source '$SESSION_SH' 2>/dev/null
+_gcloud_warn_if_expiring_soon \"\$(( \$(date +%s) + $seconds_ahead ))|$can_refresh|display\"
+"
+}
+
+assert_output_not_contains "_gcloud_warn_if_expiring_soon is silent when credentials auto-refresh" \
+    "GCloud" "$(_run_gcloud_warn 120 true)"
+assert_output_not_contains "_gcloud_warn_if_expiring_soon is silent when > 15 min remaining" \
+    "GCloud" "$(_run_gcloud_warn 3600 false)"
+assert_output_contains "_gcloud_warn_if_expiring_soon warns when ≤ 15 min remaining" \
+    "warning" "$(_run_gcloud_warn 840 false)"
+assert_output_contains "_gcloud_warn_if_expiring_soon is critical when ≤ 5 min remaining" \
+    "CRITICAL" "$(_run_gcloud_warn 240 false)"
+assert_output_contains "_gcloud_warn_if_expiring_soon reports expired credentials" \
+    "have expired" "$(_run_gcloud_warn -60 false)"
+assert_output_not_contains "_gcloud_warn_if_expiring_soon is silent with no status" \
+    "GCloud" "$(bash -c "source '$SESSION_SH' 2>/dev/null; _gcloud_warn_if_expiring_soon ''")"
+
+# ---------------------------------------------------------------------------
+# Story 3 — _ck_aws_logout: env var cleanup and prompt restore
+# ---------------------------------------------------------------------------
+
+echo ""
+echo "=== Story 3: _ck_aws_logout ==="
 
 _run_logout() {
     bash -c "
 source '$SESSION_SH' 2>/dev/null
+unset GCLOUD_ACCOUNT GCLOUD_PROJECT GCLOUD_ACTIVE_CONFIG
 export AWS_PROFILE='test-profile'
 export AWS_DEFAULT_PROFILE='test-profile'
 export AWS_REGION='us-east-1'
@@ -242,7 +309,7 @@ export AWS_ACCOUNT_ID='123456789012'
 export ORG_PROMPT='original-prompt'
 export PS1='[test-profile:us-east-1] original-prompt'
 
-aws_logout
+_ck_aws_logout
 
 # Print env var state as key=value lines for assertion
 echo \"AWS_PROFILE=\${AWS_PROFILE:-UNSET}\"
@@ -257,34 +324,34 @@ echo \"PS1=\${PS1:-UNSET}\"
 
 logout_output=$(_run_logout 2>/dev/null || echo "")
 
-assert_output_contains "aws_logout unsets AWS_PROFILE" \
+assert_output_contains "_ck_aws_logout unsets AWS_PROFILE" \
     "AWS_PROFILE=UNSET" "$logout_output"
-assert_output_contains "aws_logout unsets AWS_DEFAULT_PROFILE" \
+assert_output_contains "_ck_aws_logout unsets AWS_DEFAULT_PROFILE" \
     "AWS_DEFAULT_PROFILE=UNSET" "$logout_output"
-assert_output_contains "aws_logout unsets AWS_REGION" \
+assert_output_contains "_ck_aws_logout unsets AWS_REGION" \
     "AWS_REGION=UNSET" "$logout_output"
-assert_output_contains "aws_logout unsets AWS_DEFAULT_REGION" \
+assert_output_contains "_ck_aws_logout unsets AWS_DEFAULT_REGION" \
     "AWS_DEFAULT_REGION=UNSET" "$logout_output"
-assert_output_contains "aws_logout unsets AWS_ACCOUNT_ID" \
+assert_output_contains "_ck_aws_logout unsets AWS_ACCOUNT_ID" \
     "AWS_ACCOUNT_ID=UNSET" "$logout_output"
-assert_output_contains "aws_logout unsets ORG_PROMPT" \
+assert_output_contains "_ck_aws_logout unsets ORG_PROMPT" \
     "ORG_PROMPT=UNSET" "$logout_output"
-assert_output_contains "aws_logout restores PS1 to original prompt" \
+assert_output_contains "_ck_aws_logout restores PS1 to original prompt" \
     "PS1=original-prompt" "$logout_output"
 
-# aws_logout prints a confirmation message
+# _ck_aws_logout prints a confirmation message
 logout_msg=$(bash -c "
 source '$SESSION_SH' 2>/dev/null
 export AWS_PROFILE='test-profile'
 export ORG_PROMPT='orig'
-aws_logout 2>&1
+_ck_aws_logout 2>&1
 " 2>/dev/null || echo "")
-assert_output_contains "aws_logout prints a confirmation message" \
+assert_output_contains "_ck_aws_logout prints a confirmation message" \
     "logged out" "$logout_msg"
 
-# Idempotent: calling aws_logout twice does not error
-assert_return_zero "aws_logout is safe to call when session vars are already unset" \
-    bash -c "source '$SESSION_SH' 2>/dev/null; aws_logout > /dev/null; aws_logout > /dev/null"
+# Idempotent: calling _ck_aws_logout twice does not error
+assert_return_zero "_ck_aws_logout is safe to call when session vars are already unset" \
+    bash -c "source '$SESSION_SH' 2>/dev/null; _ck_aws_logout > /dev/null; _ck_aws_logout > /dev/null"
 
 # ---------------------------------------------------------------------------
 # Story 4 — _update_prompt: multi-shell prompt detection
@@ -453,7 +520,7 @@ _list_profiles() {
     bash -c "
 HOME='$MOCK_HOME'
 source '$SESSION_SH' 2>/dev/null
-# Build the temp_map the same way aws_session does,
+# Build the temp_map the same way _ck_aws_login does,
 # but extended to include all profile types
 temp_map=\$(mktemp)
 trap 'rm -f \"\$temp_map\"' EXIT
@@ -509,23 +576,45 @@ assert_output_contains "profile list includes process-profile" \
 rm -f "$MOCK_CONFIG2"
 
 # ---------------------------------------------------------------------------
-# Story 6 — aws_switch: function exists and returns non-zero when no config
+# Story 6 — _ck_aws_switch: function exists and returns non-zero when no config
 # ---------------------------------------------------------------------------
 
 echo ""
-echo "=== Story 6: aws_switch ==="
+echo "=== Story 6: _ck_aws_switch ==="
 
-# aws_switch must be defined after sourcing session.sh
-assert_return_zero "aws_switch function is defined in session.sh" \
-    bash -c "source '$SESSION_SH' 2>/dev/null; declare -f aws_switch > /dev/null"
+# _ck_aws_switch must be defined after sourcing session.sh
+assert_return_zero "_ck_aws_switch function is defined in session.sh" \
+    bash -c "source '$SESSION_SH' 2>/dev/null; declare -f _ck_aws_switch > /dev/null"
 
-# With no ~/.aws/config, aws_switch should return non-zero (no profiles to switch to)
-assert_return_nonzero "aws_switch returns non-zero when ~/.aws/config is missing" \
+# With no ~/.aws/config, _ck_aws_switch should return non-zero (no profiles to switch to)
+assert_return_nonzero "_ck_aws_switch returns non-zero when ~/.aws/config is missing" \
     bash -c "
 HOME=\$(mktemp -d)
 source '$SESSION_SH' 2>/dev/null
-aws_switch > /dev/null
+_ck_aws_switch > /dev/null
 "
+
+
+# Profiles without a region leave AWS_REGION unset instead of "N/A" or ""
+region_map=$(mktemp)
+echo "(keys):no-region:N/A" > "$region_map"
+assert_eq "select_profile unsets AWS_REGION for a profile without a region" "REGION=UNSET" \
+    "$(bash -c "source '$SESSION_SH' > /dev/null 2>&1; AWS_REGION=stale; select_profile '$region_map' > /dev/null; echo REGION=\${AWS_REGION:-UNSET}")"
+echo "(keys):with-region:eu-west-1" > "$region_map"
+assert_eq "select_profile exports the profile's region" "REGION=eu-west-1" \
+    "$(bash -c "source '$SESSION_SH' > /dev/null 2>&1; select_profile '$region_map' > /dev/null; echo REGION=\${AWS_DEFAULT_REGION:-UNSET}")"
+rm -f "$region_map"
+
+# ck aws login must not replace the user's EXIT trap (bash traps are shell-wide)
+assert_output_contains "_ck_aws_login keeps the shell's EXIT trap" "echo mine" \
+    "$(bash -c "
+HOME=\$(mktemp -d); mkdir -p \"\$HOME/.aws\"; printf '[profile k]\nregion = x\n' > \"\$HOME/.aws/config\"
+command() { [ \"\$2\" = aws ] || [ \"\$2\" = jq ] || builtin command \"\$@\"; }
+source '$SESSION_SH' > /dev/null 2>&1
+trap 'echo mine' EXIT
+_ck_aws_login > /dev/null 2>&1
+trap -p EXIT
+")"
 
 # ---------------------------------------------------------------------------
 # Security: no credential values logged or printed
@@ -561,6 +650,136 @@ assert_output_not_contains \
 
 rm -f "$MOCK_CONFIG3"
 rm -rf "$MOCK_HOME3"
+
+# ---------------------------------------------------------------------------
+# Session table details: identity, credentials, ADC, production, opt-outs
+# ---------------------------------------------------------------------------
+
+echo ""
+echo "=== Session table details ==="
+
+_in_session() { bash -c "source '$SESSION_SH' 2>/dev/null; $1" 2>&1; }
+
+assert_eq "_aws_describe_identity: IAM user" \
+    "IAM user jane" "$(_in_session "_aws_describe_identity 'arn:aws:iam::123456789012:user/team/jane'")"
+assert_eq "_aws_describe_identity: SSO permission set without suffix" \
+    "SSO Read_Only as jane@example.com" \
+    "$(_in_session "_aws_describe_identity 'arn:aws:sts::123456789012:assumed-role/AWSReservedSSO_Read_Only_0a1b2c3d4e5f/jane@example.com'")"
+assert_eq "_aws_describe_identity: assumed role" \
+    "Role Deploy as ci-run" "$(_in_session "_aws_describe_identity 'arn:aws:sts::123456789012:assumed-role/Deploy/ci-run'")"
+assert_eq "_aws_describe_identity: root" \
+    "Root user" "$(_in_session "_aws_describe_identity 'arn:aws:iam::123456789012:root'")"
+
+MOCK_HOME4=$(mktemp -d)
+assert_eq "_aws_credentials_summary: IAM user without expiry is static keys" \
+    "Static keys · no expiry" \
+    "$(HOME="$MOCK_HOME4" _in_session "_aws_credentials_summary p 'arn:aws:iam::1:user/jane' ''")"
+future_ts=$(python3 -c "
+from datetime import datetime, timezone, timedelta
+print((datetime.now(timezone.utc) + timedelta(hours=2, minutes=30)).strftime('%Y-%m-%dT%H:%M:%SZ'))")
+assert_output_contains "_aws_credentials_summary shows expiry countdown" \
+    "Assumed role · expires" \
+    "$(HOME="$MOCK_HOME4" _in_session "_aws_credentials_summary p 'arn:aws:sts::1:assumed-role/R/s' '$future_ts'")"
+assert_output_contains "_aws_credentials_summary countdown is in hours and minutes" \
+    "(in 2h " \
+    "$(HOME="$MOCK_HOME4" _in_session "_aws_credentials_summary p 'arn:aws:sts::1:assumed-role/R/s' '$future_ts'")"
+rm -rf "$MOCK_HOME4"
+
+# ADC: run with an isolated gcloud config dir
+ADC_DIR=$(mktemp -d)
+_adc() { CLOUDSDK_CONFIG="$ADC_DIR" GOOGLE_APPLICATION_CREDENTIALS="${2:-}" _in_session "_gcloud_adc_summary '$1'"; }
+
+assert_output_contains "_gcloud_adc_summary warns when ADC is not set" "warn|not set" "$(_adc me@example.com)"
+echo '{"type": "authorized_user", "account": "", "refresh_token": "SECRET-ADC-TOKEN"}' > "$ADC_DIR/application_default_credentials.json"
+assert_output_contains "_gcloud_adc_summary: user login without account" "info|user login" "$(_adc me@example.com)"
+assert_output_not_contains "_gcloud_adc_summary does not print the refresh token" "SECRET-ADC-TOKEN" "$(_adc me@example.com)"
+echo '{"type": "authorized_user", "account": "me@example.com"}' > "$ADC_DIR/application_default_credentials.json"
+assert_output_contains "_gcloud_adc_summary: same account" "ok|same as gcloud account" "$(_adc me@example.com)"
+echo '{"type": "authorized_user", "account": "other@example.com"}' > "$ADC_DIR/application_default_credentials.json"
+assert_output_contains "_gcloud_adc_summary: different account" "warn|different account: other@example.com" "$(_adc me@example.com)"
+echo '{"type": "service_account", "client_email": "sa@p.iam.gserviceaccount.com", "private_key": "SECRET-KEY"}' > "$ADC_DIR/sa.json"
+assert_output_contains "_gcloud_adc_summary: GOOGLE_APPLICATION_CREDENTIALS service account" \
+    "info|service account sa@p.iam.gserviceaccount.com (GOOGLE_APPLICATION_CREDENTIALS)" "$(_adc me@example.com "$ADC_DIR/sa.json")"
+echo '{"type": "impersonated_service_account", "service_account_impersonation_url": "https://iamcredentials.googleapis.com/v1/projects/-/serviceAccounts/deploy@p.iam.gserviceaccount.com:generateAccessToken"}' > "$ADC_DIR/application_default_credentials.json"
+assert_output_contains "_gcloud_adc_summary: impersonation" "info|impersonating deploy@p.iam.gserviceaccount.com" "$(_adc me@example.com)"
+rm -rf "$ADC_DIR"
+
+# Production detection
+for name in prod my-prod-account production speero-prd eu-prod-1; do
+    assert_return_zero "_ck_is_prod matches '$name'" bash -c "source '$SESSION_SH' 2>/dev/null; _ck_is_prod '$name'"
+done
+for name in products-api staging dev reproduce; do
+    assert_return_nonzero "_ck_is_prod does not match '$name'" bash -c "source '$SESSION_SH' 2>/dev/null; _ck_is_prod '$name'"
+done
+assert_return_zero "_ck_is_prod honours CLOUDKIT_PROD_PATTERN" \
+    bash -c "source '$SESSION_SH' 2>/dev/null; CLOUDKIT_PROD_PATTERN='^live$' _ck_is_prod live"
+assert_output_contains "_ck_prod_banner prints for production" "PRODUCTION" "$(_in_session "_ck_prod_banner dev prod-main")"
+assert_output_not_contains "_ck_prod_banner is silent otherwise" "PRODUCTION" "$(_in_session "_ck_prod_banner dev staging")"
+
+# Prompt: production marker and opt-out
+assert_output_contains "_update_prompt adds [PROD] for a production profile" "[PROD]" \
+    "$(_in_session "unset ZSH_VERSION; PS1='\$ '; AWS_PROFILE=prod-admin; AWS_DEFAULT_REGION=us-east-1; _update_prompt; echo \"\$PS1\"")"
+assert_output_not_contains "_update_prompt has no [PROD] for other profiles" "[PROD]" \
+    "$(_in_session "unset ZSH_VERSION; PS1='\$ '; AWS_PROFILE=dev; AWS_DEFAULT_REGION=us-east-1; _update_prompt; echo \"\$PS1\"")"
+assert_eq "_update_prompt leaves the prompt alone with CLOUDKIT_NO_PROMPT" "orig" \
+    "$(_in_session "unset ZSH_VERSION; PS1='orig'; AWS_PROFILE=dev; CLOUDKIT_NO_PROMPT=1 _update_prompt; echo \"\$PS1\"")"
+assert_eq "_update_prompt shows AWS and gcloud sessions together" \
+    "[dev:us-east-1] [gcloud:me@example.com:my-project] \$ " \
+    "$(_in_session "unset ZSH_VERSION ORG_PROMPT; PS1='\$ '; AWS_PROFILE=dev; AWS_DEFAULT_REGION=us-east-1; GCLOUD_ACCOUNT=me@example.com; GCLOUD_PROJECT=my-project; _update_prompt; echo \"\$PS1\"")"
+assert_output_contains "_update_prompt marks a production gcloud project" "[PROD]" \
+    "$(_in_session "unset ZSH_VERSION ORG_PROMPT AWS_PROFILE; PS1='\$ '; GCLOUD_ACCOUNT=me@example.com; GCLOUD_PROJECT=shop-prod; _update_prompt; echo \"\$PS1\"")"
+assert_eq "AWS logout keeps the gcloud segment" \
+    "[gcloud:me@example.com:my-project] \$ " \
+    "$(_in_session "unset ZSH_VERSION ORG_PROMPT; PS1='\$ '; AWS_PROFILE=dev; AWS_DEFAULT_REGION=us-east-1; GCLOUD_ACCOUNT=me@example.com; GCLOUD_PROJECT=my-project; _update_prompt; _ck_aws_logout > /dev/null; echo \"\$PS1\"")"
+assert_eq "gcloud logout after AWS logout restores the original prompt" \
+    "\$ " \
+    "$(_in_session "unset ZSH_VERSION ORG_PROMPT; PS1='\$ '; AWS_PROFILE=dev; GCLOUD_ACCOUNT=me@example.com; _update_prompt; _ck_aws_logout > /dev/null; _ck_gcloud_logout > /dev/null; echo \"\$PS1\"")"
+assert_output_contains "_aws_export_account_id exports the account from the identity" "ACCOUNT=123456789012" \
+    "$(_in_session "unset AWS_ACCOUNT_ID; _aws_export_account_id '{\"Account\": \"123456789012\"}'; echo ACCOUNT=\$AWS_ACCOUNT_ID")"
+# gcloud config selection is per shell (CLOUDSDK_ACTIVE_CONFIG_NAME), never global
+GCLOUD_MAP=$(mktemp)
+printf 'default:True:me@example.com:proj-a:\nwork:False:me@work.com:proj-b:europe-west1\n' > "$GCLOUD_MAP"
+gcloud_select_out=$(_in_session "
+gcloud() { echo \"GCLOUD-CALLED \$*\"; }
+select_gcloud_profile '$GCLOUD_MAP' <<< 2 > /dev/null
+echo CONFIG=\$CLOUDSDK_ACTIVE_CONFIG_NAME ACCOUNT=\$GCLOUD_ACCOUNT REGION=\$GCLOUD_REGION")
+assert_output_contains "select_gcloud_profile selects the config for this shell" \
+    "CONFIG=work ACCOUNT=me@work.com REGION=europe-west1" "$gcloud_select_out"
+assert_output_not_contains "select_gcloud_profile does not change gcloud's global config" \
+    "GCLOUD-CALLED" "$gcloud_select_out"
+rm -f "$GCLOUD_MAP"
+# New terminals start with no gcloud account (like no AWS_PROFILE)
+GC_DIR=$(mktemp -d)
+mkdir -p "$GC_DIR/configurations"
+_fresh_shell() { CLOUDSDK_CONFIG="$GC_DIR" bash -c "unset CLOUDSDK_ACTIVE_CONFIG_NAME CLOUDSDK_CORE_ACCOUNT; $1; source '$SESSION_SH' 2>/dev/null; $2" 2>&1; }
+_state='echo "CONFIG=${CLOUDSDK_ACTIVE_CONFIG_NAME-unset} ACCOUNT=${CLOUDSDK_CORE_ACCOUNT-unset}"'
+assert_eq "sourcing session.sh starts with an empty gcloud account override" "CONFIG=unset ACCOUNT=" \
+    "$(_fresh_shell ":" "$_state")"
+assert_eq "no extra gcloud configuration is created" "" "$(ls "$GC_DIR/configurations")"
+assert_eq "CLOUDKIT_GCLOUD_GLOBAL keeps gcloud's global config and account" "CONFIG=unset ACCOUNT=unset" \
+    "$(_fresh_shell "export CLOUDKIT_GCLOUD_GLOBAL=1" "$_state")"
+assert_eq "a config chosen in a parent shell is kept" "CONFIG=work ACCOUNT=unset" \
+    "$(_fresh_shell "export CLOUDSDK_ACTIVE_CONFIG_NAME=work" "$_state")"
+assert_eq "shells left on the old ck-none config start unselected" "CONFIG=unset ACCOUNT=" \
+    "$(_fresh_shell "export CLOUDSDK_ACTIVE_CONFIG_NAME=ck-none" "$_state")"
+assert_eq "choosing a config clears the empty account override" "CONFIG=work ACCOUNT=unset" \
+    "$(_fresh_shell ":" "_ck_gcloud_use_config work; $_state")"
+assert_eq "_ck_gcloud_logout leaves the shell without a gcloud account" "CONFIG=unset ACCOUNT=" \
+    "$(_fresh_shell ":" "_ck_gcloud_use_config work; GCLOUD_ACCOUNT=me@work.com; _ck_gcloud_logout > /dev/null; $_state")"
+assert_eq "Spaceship's gcloud section is hidden while no account is selected" "SHOW=false" \
+    "$(_fresh_shell ":" 'echo SHOW=$SPACESHIP_GCLOUD_SHOW')"
+assert_eq "Spaceship's gcloud section returns after choosing a config" "SHOW=true" \
+    "$(_fresh_shell "SPACESHIP_GCLOUD_SHOW=true" '_ck_gcloud_use_config work; echo SHOW=$SPACESHIP_GCLOUD_SHOW')"
+assert_eq "a user's own SPACESHIP_GCLOUD_SHOW=false is kept after choosing" "SHOW=false" \
+    "$(_fresh_shell "SPACESHIP_GCLOUD_SHOW=false" '_ck_gcloud_use_config work; echo SHOW=$SPACESHIP_GCLOUD_SHOW')"
+assert_eq "logout hides Spaceship's gcloud section again" "SHOW=false" \
+    "$(_fresh_shell "SPACESHIP_GCLOUD_SHOW=true" '_ck_gcloud_use_config work; GCLOUD_ACCOUNT=x; _ck_gcloud_logout > /dev/null; echo SHOW=$SPACESHIP_GCLOUD_SHOW')"
+rm -rf "$GC_DIR"
+
+assert_eq "clear_terminal prints nothing when stdout is not a terminal" "" \
+    "$(_in_session "clear_terminal")"
+assert_eq "clear_terminal does nothing with CLOUDKIT_NO_CLEAR" "" \
+    "$(_in_session "CLOUDKIT_NO_CLEAR=1 clear_terminal")"
 
 # ---------------------------------------------------------------------------
 # Summary

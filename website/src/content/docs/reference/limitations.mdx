@@ -1,0 +1,59 @@
+---
+title: Known limitations
+description: Verified limitations and known issues in the current CloudKit release, with workarounds.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+This page lists behavior of the current CloudKit release that may surprise you, and known issues. Each item has a workaround where one exists. Command reference pages link here.
+
+## Platform
+
+- **Shells:** bash and zsh only. Other shells (fish, nushell, PowerShell) cannot source CloudKit.
+- **Operating systems:** macOS and Linux. Windows is not supported directly.
+- **Interactive use:** commands prompt for choices, clear the screen, and change the prompt. They are designed for a person at a terminal. In scripts, call `aws` and `gcloud` directly.
+- **Shell namespace:** CloudKit defines unprefixed helper functions (for example `select_profile`, `clear_terminal`) and variables (`RED`, `GREEN`, `NC` and other colors) in your shell. A function or variable of the same name in your rc file overrides CloudKit's or is overridden by it, depending on which is defined last.
+
+## Sessions
+
+- `ck aws login` lists only profiles with `sso_account_id`. Use `ck aws switch` for other profiles.
+- Profiles are read from `$HOME/.aws/config` only; `AWS_CONFIG_FILE` is ignored. Profiles that exist only in `~/.aws/credentials` are not listed.
+- A profile without `region` leaves `AWS_REGION` unset, so AWS commands fail with `You must specify a region`. Add a `region` to every profile.
+- The profile is exported before credentials are validated. After a failed login, the terminal still points at the failed profile until you run `ck aws logout` or log in again.
+- Credentials are checked only when you log in or switch. CloudKit does not refresh or re-check them; `ck status` reads environment variables only.
+
+## EC2
+
+- `ck ec2` commands have no `--profile` or `--region` flags. Prefix a single command with `AWS_REGION=…` or `AWS_PROFILE=…` instead ([details](/concepts/targeting/#run-one-command-against-another-region-or-profile)).
+- Only `ck ec2 session` has an instance picker; `run`, `stop` and `port-forward` need an instance ID.
+- The `session` picker lists every running instance in the region, including ones that are not SSM-managed.
+
+## ECS
+
+- `ck ecs logs` supports the `awslogs` driver only, needs an `awslogs-stream-prefix`, and prints a snapshot of recent events rather than following new ones. Use `aws logs tail --follow` to stream.
+- Task tables and `task-info` show the first container of each task only. `ck ecs logs` defaults to the first container; pass `--container` for another.
+- `ck ecs exec-running` picks the first task `list-tasks` returns, not a specific or healthy one.
+- `--running` and `--service` are recognized only in the positions shown in the syntax.
+
+## Compute Engine
+
+- `ck gce ls`, `ls-running` and `ls-stopped` have no `--project` or `--zone` option. Use `CLOUDSDK_CORE_PROJECT=<project> ck gce ls` or switch configuration.
+- `ck gce ls-stopped` shows `TERMINATED` VMs only, not `SUSPENDED` ones.
+- CloudKit's flags (`--zone`, `--project`, `--tunnel-iap`, `--no-iap`, `--tunnel-only`, `--forward`, `-r`, `--recurse`) are recognized anywhere on the line, including inside a remote command. Put `--` before remote commands.
+- `ck gce port-forward` always uses IAP; `--tunnel-iap` and `--no-iap` have no effect there.
+- Zone lookup does not use the configuration's default zone.
+
+## Managed instance groups
+
+- `describe`, `restart` and `recreate` support regional groups only (`--region`). Use gcloud with `--zone` for zonal groups.
+- `--region` must immediately follow the group name.
+- Rolling actions use gcloud's default pace; there are no `--max-unavailable` or `--max-surge` options.
+
+## Safety
+
+- No command asks for confirmation before stopping, resetting, replacing or restarting resources, including in production.
+- Production detection checks names only, and only drives visual markers.
+
+<Aside type="tip" title="Reporting issues">
+If you find behavior that is not listed here, please [open an issue](https://github.com/shabayekdes/cloudkit-cli/issues). See [Collecting information for an issue](/guides/diagnose/#collecting-information-for-an-issue) for what to include, and what to remove.
+</Aside>

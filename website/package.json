@@ -1,0 +1,17 @@
+{
+  "name": "cloudkit-docs",
+  "type": "module",
+  "scripts": {
+    "dev": "astro dev",
+    "build": "astro build",
+    "preview": "astro preview",
+    "astro": "astro"
+  },
+  "dependencies": {
+    "@astrojs/starlight": "0.42.7",
+    "astro": "7.4.2",
+    "sharp": "0.35.5",
+    "starlight-links-validator": "0.27.0"
+  },
+  "private": true
+}
