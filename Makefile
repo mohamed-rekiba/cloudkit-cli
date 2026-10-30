@@ -12,8 +12,9 @@ help:
 shellcheck: ## Run Shellcheck on Bash scripts (excludes Expect)
 	shellcheck -x $(SCRIPTS)
 
-test: ## Run all tests (smoke + auth; no AWS credentials required)
+test: ## Run all tests (smoke + auth + ec2; no AWS credentials required)
 	@bash "$(CURDIR)/test/run.sh"
 	@bash "$(CURDIR)/test/test_auth.sh"
+	@bash "$(CURDIR)/test/test_ec2.sh"
 
 ci: shellcheck test ## Run all CI checks

@@ -7,6 +7,115 @@ else
 fi
 export SERVICES_DIR
 
+# _ec2_tunnel [SSH_HOST]
+#
+# Opens a reverse SSH tunnel over SSM to the instance named by the SSH_HOST
+# entry in ~/.ssh/config (default: ec2-tunnel), and reconnects with autossh
+# when the connection drops. The body runs in a subshell, so `exit`, the
+# exported AWS_* variables, and the INT/TERM trap do not leak into the
+# caller's interactive shell.
+_ec2_tunnel() (
+  local host="${1:-ec2-tunnel}"
+
+  local tool
+  for tool in ssh aws autossh; do
+    if ! command -v "$tool" > /dev/null 2>&1; then
+      printf "%sError: %s is required. Please install it.%s\n" "${RED}" "$tool" "${NC}" >&2
+      exit 1
+    fi
+  done
+
+  local ssh_config
+  ssh_config=$(ssh -G "$host" 2>/dev/null)
+
+  # ssh -G prints hostname as the alias itself when ~/.ssh/config has no entry
+  local instance_id
+  instance_id=$(printf '%s\n' "$ssh_config" | awk '/^hostname /{print $2; exit}')
+  if ! [[ "$instance_id" =~ ^m?i-[0-9a-f]+$ ]]; then
+    printf "%sError: HostName for '%s' in ~/.ssh/config is not an instance ID (got '%s').%s\n" \
+      "${RED}" "$host" "$instance_id" "${NC}" >&2
+    exit 1
+  fi
+
+  # ssh -G prints forwards as "[bind]:port [host]:port". Only the first one is
+  # shown in the banner; autossh still opens every forward in the entry.
+  local forward
+  forward=$(printf '%s\n' "$ssh_config" | awk '/^remoteforward /{print $2, $3; exit}')
+  if [[ -z "$forward" ]]; then
+    printf "%sError: No RemoteForward found for '%s' in ~/.ssh/config.%s\n" "${RED}" "$host" "${NC}" >&2
+    exit 1
+  fi
+
+  local listen local_target remote_port bind_host=""
+  read -r listen local_target <<< "$(printf '%s' "$forward" | tr -d '[]')"
+  remote_port="${listen##*:}"
+  if [[ "$listen" == *:* ]]; then
+    bind_host="${listen%:*}"
+  fi
+
+  # Use the same profile and region as the ProxyCommand, so the credential
+  # check and the IP lookup hit the account that the tunnel connects to
+  local proxy profile region
+  proxy=$(printf '%s\n' "$ssh_config" | awk '/^proxycommand /{sub(/^proxycommand /, ""); print; exit}')
+  profile=$(printf '%s' "$proxy" | sed -nE "s/.*--profile[= ]+([^ \"']+).*/\1/p")
+  region=$(printf '%s' "$proxy" | sed -nE "s/.*--region[= ]+([^ \"']+).*/\1/p")
+  if [[ -n "$profile" ]]; then
+    export AWS_PROFILE="$profile"
+    export AWS_DEFAULT_PROFILE="$profile"
+  fi
+  if [[ -n "$region" ]]; then
+    export AWS_REGION="$region"
+    export AWS_DEFAULT_REGION="$region"
+  fi
+
+  local profile_name="${AWS_PROFILE:-default}"
+  local err
+  if ! err=$(aws sts get-caller-identity 2>&1 > /dev/null); then
+    if [[ "$(_detect_credential_type "$profile_name")" != "sso" ]]; then
+      printf "%sError: AWS credentials are not valid for profile '%s':%s\n" "${RED}" "$profile_name" "${NC}" >&2
+      printf "  %s\n" "$err" >&2
+      printf "  Run 'aws configure list --profile %s' to check.\n" "$profile_name" >&2
+      exit 1
+    fi
+    printf "%sAWS SSO session expired. Initiating SSO login for %s...%s\n" "${BOLD_GREEN}" "$profile_name" "${NC}"
+    aws sso login --profile "$profile_name" || exit 1
+    if ! aws sts get-caller-identity > /dev/null 2>&1; then
+      printf "%sFailed to authenticate with profile: %s%s\n" "${RED}" "$profile_name" "${NC}" >&2
+      exit 1
+    fi
+  fi
+
+  local public_ip private_ip ip ip_type
+  read -r public_ip private_ip <<< "$(aws ec2 describe-instances --instance-ids "$instance_id" \
+    --query 'Reservations[0].Instances[0].[PublicIpAddress,PrivateIpAddress]' \
+    --output text 2>/dev/null)"
+
+  if [[ -n "$public_ip" && "$public_ip" != "None" ]]; then
+    ip="$public_ip"; ip_type="public"
+  elif [[ -n "$private_ip" && "$private_ip" != "None" ]]; then
+    ip="$private_ip"; ip_type="private, reachable only inside the VPC"
+  else
+    ip="<unknown>"; ip_type="IP lookup failed"
+  fi
+
+  printf "\n%sStarting EC2 tunnel via %s (%s, profile: %s)%s\n" \
+    "${BOLD_GREEN}" "$host" "$instance_id" "$profile_name" "${NC}"
+  printf "  %s%s:%s%s (%s) -> %s%s%s\n" \
+    "${CYAN}" "$ip" "$remote_port" "${NC}" "$ip_type" "${BLUE}" "$local_target" "${NC}"
+  if [[ -z "$bind_host" || "$bind_host" == "localhost" || "$bind_host" == "127.0.0.1" ]]; then
+    printf "  %sNote: the forward binds to the instance loopback only. Other hosts cannot reach it.%s\n" \
+      "${YELLOW}" "${NC}"
+  fi
+  printf "  %sPress Ctrl+C to close.%s\n\n" "${GRAY}" "${NC}"
+
+  trap 'printf "\n%sTunnel closed.%s\n" "${GRAY}" "${NC}"; exit 0' INT TERM
+
+  # GATETIME=0 keeps autossh retrying even when the first connection fails.
+  # -M 0 turns off the autossh monitor port; ServerAlive* in ~/.ssh/config
+  # detects a dead connection instead.
+  AUTOSSH_GATETIME=0 autossh -M 0 -N "$host"
+)
+
 # EC2 CLI function
 ec2() {
   case "$1" in
@@ -118,6 +227,10 @@ ec2() {
       "$SERVICES_DIR/_ec2_upload.sh" "$instance_id" "$file_to_send" "$remote_file_name" "$port"
       ;;
 
+    tunnel)
+      _ec2_tunnel "$2"
+      ;;
+
     *)
       cat << 'EOF'
 Usage: ec2 <command> [options]
@@ -135,6 +248,9 @@ Commands:
                             - With host: forwards from remote service through EC2
   upload <instance-id> <local-file> [remote-path] [port]
                             Upload a file to an instance via SSM
+  tunnel [ssh-host]         Open a reverse SSH tunnel over SSM with autossh
+                            - Reads the instance and RemoteForward from ~/.ssh/config
+                            - Default ssh-host: ec2-tunnel
 
 Examples:
   ec2 ls
@@ -146,6 +262,8 @@ Examples:
   ec2 port-forward 8080 8080 i-1234567890abcdef0
   ec2 port-forward 3306 3306 i-1234567890abcdef0 mydb.123456789012.us-west-2.rds.amazonaws.com
   ec2 upload i-1234567890abcdef0 /local/file.txt /home/ec2-user/file.txt 8888
+  ec2 tunnel
+  ec2 tunnel my-other-tunnel
 EOF
       return 1
       ;;
