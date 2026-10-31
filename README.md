@@ -98,6 +98,15 @@ sudo sshd -t && sudo systemctl restart sshd
 
    The instance security group must also allow inbound traffic on the forwarded port (`8080` in the example below). If a tunnel is already open, restart it.
 
+   Optional but recommended: make sshd close dead sessions. When your machine sleeps or the network drops, the SSM agent does not always close its connection to sshd. sshd then keeps the forwarded port open, and new tunnels fail with `remote port forwarding failed`. With the settings below, sshd closes a silent session after about 90 seconds, and `ec2 tunnel` reconnects on its own:
+
+```bash
+printf 'ClientAliveInterval 30\nClientAliveCountMax 3\n' | sudo tee /etc/ssh/sshd_config.d/00-client-alive.conf
+sudo sshd -t && sudo systemctl restart sshd
+```
+
+   `ec2 tunnel` also clears a dead session on the instance before it connects. That step needs passwordless `sudo` for the SSH user. `ec2-user` on Amazon Linux has it by default.
+
 4. Add a `Host` entry to `~/.ssh/config`. `ec2 tunnel` uses `ec2-tunnel` as the default host name:
 
 ```
@@ -216,6 +225,8 @@ Notes:
     - **With host:** forwards from a remote service through the EC2 instance (e.g., RDS, ElastiCache)
   - `ec2 upload <instance-id> <local-file> [remote-path] [port]` -- upload a file to an EC2 instance via SSM port forwarding
   - `ec2 tunnel [ssh-host]` -- open a reverse SSH tunnel over SSM, with automatic reconnect (default host: `ec2-tunnel`; see **EC2 tunnel setup** above)
+    - Refuses to start when a tunnel for the same host is already running on your machine. Two tunnels for one host fight for the same instance port.
+    - Before it connects, it kills any `sshd` process on the instance that still holds the forwarded port from a dead tunnel. It kills only `sshd` processes, and the tunnel still starts if this step fails.
 
 - `ecs` helper with subcommands:
   - `ecs clusters` -- list all ECS clusters
@@ -325,7 +336,9 @@ gcloud_logout          # clear session
 - ECS exec fails -- ensure ECS Exec is enabled (`enableExecuteCommand: true`) and the task role has SSM permissions
 - File upload fails -- ensure `expect` and `nc` are installed, SSM agent is running, and the port is available
 - `ec2 tunnel` fails with `Permission denied (publickey)` -- check that the public key is in `/home/ec2-user/.ssh/authorized_keys` and that `IdentityFile` points to the matching private key
-- `ec2 tunnel` fails with `remote port forwarding failed` -- the port is already in use on the instance, or a previous tunnel is still open
+- `ec2 tunnel` fails with `a tunnel for '<host>' is already running` -- another `ec2 tunnel` for the same host is still open, maybe in another terminal. Close it with Ctrl+C, or run the `kill <pid>` command that the error shows
+- `ec2 tunnel` repeats `remote port forwarding failed` -- the port is in use on the instance. Usually a dead tunnel session still holds it. `ec2 tunnel` tries to clear it at start. If the error stays, run `ec2 session <instance-id>`, then `sudo ss -ltnp | grep :<port>` to see what holds the port. Kill it if it is `sshd`. If it is another program, pick a different port in `RemoteForward`. To stop dead sessions, set `ClientAliveInterval` on the instance (see **EC2 tunnel setup**)
+- `ec2 tunnel` hangs, or `ssh` shows `Connection timed out during banner exchange` -- too many SSM sessions are open to the instance. Look for old `autossh` or `session-manager-plugin` processes on your machine with `ps aux | grep -E 'autossh|session-manager-plugin'`, and kill them
 - Forwarded port not reachable from other hosts -- enable `GatewayPorts` on the instance and allow the port in the security group (see **EC2 tunnel setup**)
 
 **GCloud**
