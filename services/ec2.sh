@@ -110,6 +110,41 @@ _ec2_tunnel() (
 
   trap 'printf "\n%sTunnel closed.%s\n" "${GRAY}" "${NC}"; exit 0' INT TERM
 
+  # Two autossh loops for one host fight for the same remote port, and each
+  # one makes the other fail. Refuse to start a second loop. Debian and Ubuntu
+  # run autossh as /usr/lib/autossh/autossh, so match a path prefix too.
+  local running
+  running=$(pgrep -f "(^|/)autossh .* ${host}\$" | tr '\n' ' ' | sed 's/ $//')
+  if [[ -n "$running" ]]; then
+    printf "%sError: a tunnel for '%s' is already running (autossh pid %s).%s\n" \
+      "${RED}" "$host" "$running" "${NC}" >&2
+    printf "  Close it with Ctrl+C in its terminal, or run: kill %s\n" "$running" >&2
+    exit 1
+  fi
+
+  # A dead tunnel session can keep the remote port bound on the instance, and
+  # then every new forward fails. Kill only sshd processes that listen on the
+  # port. OpenSSH 9.8 and later name the session process "sshd-session".
+  # This step is best effort: a failure here does not stop the tunnel.
+  local cleanup_cmd
+  cleanup_cmd=$(printf '%s' \
+    "pids=\$(sudo -n ss -ltnpH 'sport = :${remote_port}' 2>/dev/null" \
+    " | grep -oE '\"sshd(-session)?\",pid=[0-9]+' | grep -oE '[0-9]+\$' | sort -u);" \
+    " if [ -n \"\$pids\" ]; then sudo -n kill \$pids && echo \"\$pids\"; fi")
+  local killed
+  printf "  %sChecking for old tunnel sessions on port %s...%s\n" "${GRAY}" "$remote_port" "${NC}"
+  killed=$(ssh -o ClearAllForwardings=yes -o BatchMode=yes -o ConnectTimeout=20 \
+    -o ServerAliveInterval=5 -o ServerAliveCountMax=3 \
+    "$host" "$cleanup_cmd" 2>/dev/null) || true
+  if [[ -n "$killed" ]]; then
+    printf "  %sClosed old tunnel session (pid %s).%s\n" "${YELLOW}" "$(tr '\n' ' ' <<< "$killed" | sed 's/ $//')" "${NC}"
+  else
+    printf "  %sNo old tunnel sessions found.%s\n" "${GRAY}" "${NC}"
+  fi
+
+  # ssh -N prints nothing while the tunnel works, so say that up front.
+  printf "  %sConnecting. The tunnel is up when no errors follow.%s\n\n" "${BOLD_GREEN}" "${NC}"
+
   # GATETIME=0 keeps autossh retrying even when the first connection fails.
   # -M 0 turns off the autossh monitor port; ServerAlive* in ~/.ssh/config
   # detects a dead connection instead.
