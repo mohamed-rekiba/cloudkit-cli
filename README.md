@@ -214,101 +214,35 @@ Source `main.sh` to load all helpers into your shell.
 
 ## 5) EC2 tunnel
 
-`ec2 tunnel` makes a port on your machine available as a port on an EC2 instance. Traffic to port `8080` on the instance goes to `localhost:8080` on your machine. The instance needs no open SSH port.
+`ec2 tunnel` opens a reverse SSH tunnel over SSM. Traffic to a port on an EC2 instance goes to a port on your machine, for example from port `8080` on the instance to `localhost:8080`. The instance needs no inbound SSH port.
 
-### How it works
+Do the setup in [docs/ec2-tunnel.md](docs/ec2-tunnel.md) first. That guide covers how the tunnel works, the AWS environment and policies it needs, the one-time setup, limits, and troubleshooting. This section covers only what the CLI adds.
 
-1. **SSM carries the connection.** The `ProxyCommand` in `~/.ssh/config` opens an SSM session to port 22 on the instance. Your AWS login (SSO or other) controls who can open this session.
-2. **sshd on the instance does the login.** sshd knows nothing about IAM or SSO. It checks your SSH key against `authorized_keys`. This is why the tunnel needs a key even when SSO works.
-3. **sshd opens the forwarded port.** `RemoteForward` asks sshd to listen on the instance port. sshd decides the bind address, not your `~/.ssh/config`.
-4. **autossh keeps it up.** When the connection drops, autossh reconnects.
-
-> **Warning:** some hardened images set `DenyUsers *` in `/etc/ssh/sshd_config`. That blocks every SSH login, so the tunnel cannot work. Check this before you start. See [Troubleshooting](#ec2-tunnel) for how to check and what to ask the image owner.
-
-### One-time setup
-
-Do steps 1 to 4 once per instance. Replace the instance ID, region, and profile with your own.
-
-**Step 1. Create an SSH key** for the tunnel. You can also use an existing key, such as `~/.ssh/id_ed12345`. Then use its path in steps 2 and 5.
+### Usage
 
 ```bash
-ssh-keygen -t ed12345 -f ~/.ssh/ec2_tunnel -C "ec2-tunnel"
+ec2 tunnel              # use the Host entry "ec2-tunnel" in ~/.ssh/config
+ec2 tunnel <ssh-host>   # use another Host entry
 ```
 
-**Step 2. Add the public key to the instance.** This command uses SSM Run Command, so it needs no SSH access:
+Press Ctrl+C to close the tunnel.
 
-```bash
-aws ssm send-command \
-  --instance-ids i-0123456789abcdef0 \
-  --document-name AWS-RunShellScript \
-  --region us-east-1 \
-  --profile <aws_profile> \
-  --parameters "commands=[\"mkdir -p /home/ec2-user/.ssh\",\"echo '$(cat ~/.ssh/ec2_tunnel.pub)' >> /home/ec2-user/.ssh/authorized_keys\",\"chown -R ec2-user:ec2-user /home/ec2-user/.ssh\",\"chmod 700 /home/ec2-user/.ssh\",\"chmod 600 /home/ec2-user/.ssh/authorized_keys\"]"
-```
+### What `ec2 tunnel` reads from `~/.ssh/config`
 
-The command prints a `CommandId`. Use it to check that the command succeeded:
-
-```bash
-aws ssm list-command-invocations \
-  --command-id <command-id> \
-  --details \
-  --region us-east-1 \
-  --profile <aws_profile> \
-  --query 'CommandInvocations[0].Status'
-```
-
-**Step 3. Let other hosts reach the forwarded port.** Do this step when `RemoteForward` binds to `0.0.0.0`, as in step 5. By default, sshd binds a remote forward to `127.0.0.1` on the instance, even when `RemoteForward` asks for `0.0.0.0`. You cannot change this in `~/.ssh/config`.
-
-Open a shell on the instance with `ec2 session i-0123456789abcdef0`. Then enable `GatewayPorts` and restart sshd:
-
-```bash
-echo 'GatewayPorts clientspecified' | sudo tee /etc/ssh/sshd_config.d/00-gateway-ports.conf
-sudo sshd -t && sudo systemctl restart sshd
-```
-
-- The example is for Amazon Linux 2023, which reads `/etc/ssh/sshd_config.d/`.
-- sshd uses the first value it reads. The `00-` prefix makes this file win over other files.
-- The security group of the instance must allow inbound traffic on the forwarded port (`8080` in the example).
-- If a tunnel is already open, restart it.
-
-**Step 4. Make sshd close dead sessions** (optional, recommended). When your machine sleeps or the network drops, the SSM agent does not always close its connection to sshd. sshd then keeps the forwarded port open, and new tunnels fail with `remote port forwarding failed`. With these settings, sshd closes a silent session after about 90 seconds:
-
-```bash
-printf 'ClientAliveInterval 30\nClientAliveCountMax 3\n' | sudo tee /etc/ssh/sshd_config.d/00-client-alive.conf
-sudo sshd -t && sudo systemctl restart sshd
-```
-
-**Step 5. Add a `Host` entry to `~/.ssh/config`.** `ec2 tunnel` uses `ec2-tunnel` as the default host name:
-
-```
-Host ec2-tunnel
-    HostName i-0123456789abcdef0
-    User ec2-user
-    IdentityFile ~/.ssh/ec2_tunnel
-    RemoteForward 0.0.0.0:8080 localhost:8080
-    ServerAliveInterval 30
-    ServerAliveCountMax 3
-    ExitOnForwardFailure yes
-    ProxyCommand sh -c "aws ssm start-session --target %h --document-name AWS-StartSSHSession --parameters 'portNumber=%p' --region us-east-1 --profile <aws_profile>"
-```
-
-- `HostName` is the instance ID, not an IP address. SSM resolves it.
-- `RemoteForward <instance-bind>:<instance-port> <local-host>:<local-port>` sends traffic from port `8080` on the instance to `localhost:8080` on your machine.
-- `ec2 tunnel` reads `--profile` and `--region` from the `ProxyCommand` line. It uses them to check your credentials and look up the instance IP.
-- For a second tunnel, add another `Host` entry and run `ec2 tunnel <host>`.
-
-**Step 6. Test the connection** once without the tunnel:
-
-```bash
-ssh ec2-tunnel 'echo connected'
-```
+| Setting | How the CLI uses it |
+|---|---|
+| `HostName` | Must be an instance ID (`i-...` or `mi-...`). Otherwise the CLI stops with an error. |
+| `RemoteForward` | Must be set. The CLI shows the first one in its banner, and warns when it binds to the loopback address of the instance. autossh opens every forward in the entry. |
+| `--profile` and `--region` in `ProxyCommand` | The CLI uses them to check your credentials and to look up the instance IP, so both use the account that the tunnel connects to. |
 
 ### What `ec2 tunnel` does on each run
 
-1. Checks your AWS credentials, and runs SSO login when the session expired.
-2. Refuses to start when a tunnel for the same host already runs on your machine. Two tunnels for one host fight for the same instance port.
-3. Kills any `sshd` process on the instance that still holds the forwarded port from a dead tunnel. It kills only `sshd` processes. This step needs passwordless `sudo` for the SSH user, which `ec2-user` on Amazon Linux has. The tunnel still starts if this step fails.
-4. Starts `autossh`, which reconnects when the connection drops. Press Ctrl+C to close the tunnel.
+1. Checks that `ssh`, `aws`, and `autossh` are installed.
+2. Checks your AWS credentials. For an SSO profile, it runs `aws sso login` when the session expired.
+3. Looks up the IP of the instance, and shows it in the banner with the forward.
+4. Stops with an error when a tunnel for the same host already runs on your machine. Two tunnels for one host fight for the same instance port.
+5. Tries to close an old tunnel session on the instance. Over SSH, it runs `sudo ss` and kills `sshd` processes that listen on the forwarded port. This step is best effort: the tunnel starts even when it fails. It does nothing with the restricted key from the setup guide, because that key cannot run commands.
+6. Starts `AUTOSSH_GATETIME=0 autossh -M 0 -N <ssh-host>`. autossh reconnects when the connection drops.
 
 ## 6) Typical workflow
 
@@ -386,56 +320,25 @@ Check that `expect` and `nc` are installed, that the SSM agent runs, and that th
 
 ### EC2 tunnel
 
-**`Permission denied (publickey)`**
+These entries cover errors from the CLI. For errors from SSH, SSM, or the API, see [Troubleshooting in docs/ec2-tunnel.md](docs/ec2-tunnel.md#8-troubleshooting).
 
-1. Check that the public key is in `/home/ec2-user/.ssh/authorized_keys` on the instance.
-2. Check that `IdentityFile` points to the matching private key.
-3. If the key is correct, check the sshd log. Run `ec2 session <instance-id>`, then:
+**`Error: autossh is required. Please install it.`**
+Install the tool that the error names. For `autossh` on macOS: `brew install autossh`.
 
-   ```bash
-   sudo journalctl -u sshd | grep DenyUsers
-   ```
+**`HostName for '<host>' in ~/.ssh/config is not an instance ID`**
+Set `HostName` in the `Host` entry to the instance ID, for example `i-0123456789abcdef0`.
 
-   The line `not allowed because listed in DenyUsers` means the image blocks all SSH logins. No key or IAM permission can fix this.
+**`No RemoteForward found for '<host>' in ~/.ssh/config`**
+Add a `RemoteForward` line to the `Host` entry. See the `Host` entry step in [docs/ec2-tunnel.md](docs/ec2-tunnel.md).
 
-4. Get approval from the image owner before you continue. This fix turns off a security control. Then allow `ec2-user` only:
-
-   ```bash
-   sudo sed -i -E 's/^(DenyUsers|DenyGroups) \*/# &/' /etc/ssh/sshd_config
-   echo 'AllowUsers ec2-user' | sudo tee /etc/ssh/sshd_config.d/01-allow-ec2-user.conf
-   sudo sshd -t && sudo systemctl restart sshd
-   ```
-
-   You must edit `sshd_config` itself. A drop-in file cannot remove `DenyUsers`, because sshd joins all `DenyUsers` lines into one list. The fix lasts until the instance is replaced. For a lasting fix, the image owner must change the image.
+**`AWS credentials are not valid for profile '<profile>'`**
+The profile is not an SSO profile, and its credentials do not work. Run `aws configure list --profile <profile>` to check it.
 
 **`a tunnel for '<host>' is already running`**
 Another `ec2 tunnel` for the same host is still open, maybe in another terminal. Close it with Ctrl+C, or run the `kill <pid>` command that the error shows.
 
-**`remote port forwarding failed`, again and again**
-Something on the instance holds the port. Usually it is a dead tunnel session. `ec2 tunnel` tries to clear it at start. If the error stays:
-
-1. Run `ec2 session <instance-id>`.
-2. See what holds the port:
-
-   ```bash
-   sudo ss -ltnp | grep :<port>
-   ```
-
-3. If it is `sshd` or `sshd-session`, kill that process. If it is another program, pick a different port in `RemoteForward`.
-4. To stop this from happening again, do [step 4 of the setup](#one-time-setup) (`ClientAliveInterval`).
-
-**`ec2 tunnel` hangs, or `ssh` shows `Connection timed out during banner exchange`**
-Too many SSM sessions are open to the instance. Find old processes on your machine, then kill them:
-
-```bash
-ps aux | grep -E 'autossh|session-manager-plugin'
-```
-
-**Other hosts cannot reach the forwarded port**
-
-1. Check that `RemoteForward` binds to `0.0.0.0`.
-2. Do [step 3 of the setup](#one-time-setup) (`GatewayPorts`).
-3. Check that the security group allows the port.
+**`Note: the forward binds to the instance loopback only`**
+Other hosts, such as the ALB, cannot reach the forwarded port. Set the bind address in `RemoteForward`, for example `0.0.0.0:8080`, and turn on `GatewayPorts` on the instance as described in [docs/ec2-tunnel.md](docs/ec2-tunnel.md).
 
 ### GCloud
 
@@ -466,6 +369,7 @@ Most `gce-ig` commands need `--region <region>`.
 | `services/gce.sh` | `gce` commands: list, SSH, SCP |
 | `services/gce_ig.sh` | `gce-ig` commands: list, describe, recreate, restart |
 | `test/` | Bash tests with mocks for `aws`, `ssh`, and `autossh`. They need no cloud credentials. |
+| `docs/ec2-tunnel.md` | EC2 tunnel guide: environment, required policies, setup, daily use, and troubleshooting. The diagram is in `docs/images/`. |
 
 ## 10) Development and testing
 
