@@ -186,9 +186,9 @@ ec2() {
         --target "$2"
       ;;
 
-    run)
+    start)
       if [[ $# -lt 2 ]]; then
-        echo "Usage: ec2 run <instance-id>"
+        echo "Usage: ec2 start <instance-id>"
         return 1
       fi
       echo "Starting instance $2..."
@@ -208,6 +208,19 @@ ec2() {
         --instance-ids "$2" \
         --query 'StoppingInstances[0].{InstanceId: InstanceId, PreviousState: PreviousState.Name, CurrentState: CurrentState.Name}' \
         --output table
+      ;;
+
+    restart)
+      if [[ $# -lt 2 ]]; then
+        echo "Usage: ec2 restart <instance-id>"
+        return 1
+      fi
+      # An OS reboot, not a stop and start. reboot-instances prints nothing on
+      # success, so report the result here.
+      echo "Restarting instance $2..."
+      aws ec2 reboot-instances \
+        --instance-ids "$2" \
+        && echo "Restart requested. The instance keeps its host and IP addresses."
       ;;
 
     port-forward)
@@ -275,8 +288,9 @@ Commands:
   ls-running                List only running EC2 instances
   ls-stopped                List only stopped EC2 instances
   session <instance-id>     Start an SSM session to an instance
-  run <instance-id>         Start (run) an EC2 instance
+  start <instance-id>       Start an EC2 instance
   stop <instance-id>        Stop an EC2 instance
+  restart <instance-id>     Restart (reboot) an EC2 instance (keeps its host and IPs)
   port-forward <remote-port> <local-port> <instance-id> [host]
                             Forward a port to local machine
                             - Without host: forwards from EC2 instance itself
@@ -292,8 +306,9 @@ Examples:
   ec2 ls-running
   ec2 ls-stopped
   ec2 session i-1234567890abcdef0
-  ec2 run i-1234567890abcdef0
+  ec2 start i-1234567890abcdef0
   ec2 stop i-1234567890abcdef0
+  ec2 restart i-1234567890abcdef0
   ec2 port-forward 8080 8080 i-1234567890abcdef0
   ec2 port-forward 3306 3306 i-1234567890abcdef0 mydb.123456789012.us-west-2.rds.amazonaws.com
   ec2 upload i-1234567890abcdef0 /local/file.txt /home/ec2-user/file.txt 8888

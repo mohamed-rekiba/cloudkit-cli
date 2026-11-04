@@ -154,8 +154,9 @@ Source `main.sh` to load all helpers into your shell.
 | `ec2 ls-running` | List running instances |
 | `ec2 ls-stopped` | List stopped instances |
 | `ec2 session <instance-id>` | Open an SSM shell on the instance |
-| `ec2 run <instance-id>` | Start the instance |
+| `ec2 start <instance-id>` | Start the instance |
 | `ec2 stop <instance-id>` | Stop the instance |
+| `ec2 restart <instance-id>` | Restart the instance with an OS reboot. It keeps its host and IP addresses. |
 | `ec2 port-forward <remote-port> <local-port> <instance-id> [host]` | Forward a port to your machine over SSM. Without `host`, the port is on the instance itself (for example a web server). With `host`, the port is on a service the instance can reach (for example RDS or ElastiCache). |
 | `ec2 upload <instance-id> <local-file> [remote-path] [port]` | Upload a file to the instance over SSM port forwarding |
 | `ec2 tunnel [ssh-host]` | Open a reverse SSH tunnel over SSM, and reconnect when it drops. The default `ssh-host` is `ec2-tunnel`. Needs a one-time setup: see [EC2 tunnel](#5-ec2-tunnel). |
@@ -216,7 +217,7 @@ Source `main.sh` to load all helpers into your shell.
 
 `ec2 tunnel` opens a reverse SSH tunnel over SSM. Traffic to a port on an EC2 instance goes to a port on your machine, for example from port `8080` on the instance to `localhost:8080`. The instance needs no inbound SSH port.
 
-Do the setup in [docs/ec2-tunnel.md](docs/ec2-tunnel.md) first. That guide covers how the tunnel works, the AWS environment and policies it needs, the one-time setup, limits, and troubleshooting. This section covers only what the CLI adds.
+Do the setup in [docs/ec2-tunnel/README.md](docs/ec2-tunnel/README.md) first. That guide covers how the tunnel works, the Terraform that deploys the AWS resources, the developer setup, limits, and troubleshooting. This section covers only what the CLI adds.
 
 ### Usage
 
@@ -233,7 +234,7 @@ Press Ctrl+C to close the tunnel.
 |---|---|
 | `HostName` | Must be an instance ID (`i-...` or `mi-...`). Otherwise the CLI stops with an error. |
 | `RemoteForward` | Must be set. The CLI shows the first one in its banner, and warns when it binds to the loopback address of the instance. autossh opens every forward in the entry. |
-| `--profile` and `--region` in `ProxyCommand` | The CLI uses them to check your credentials and to look up the instance IP, so both use the account that the tunnel connects to. |
+| `--profile` and `--region` in `ProxyCommand` | The CLI uses them to check your credentials and to look up the instance IP, so both use the account that the tunnel connects to. The IP lookup needs `ec2:DescribeInstances`, which the developer policy from the Terraform does not grant. Without it, the banner shows `<unknown>` and the tunnel still starts. |
 
 ### What `ec2 tunnel` does on each run
 
@@ -320,7 +321,7 @@ Check that `expect` and `nc` are installed, that the SSM agent runs, and that th
 
 ### EC2 tunnel
 
-These entries cover errors from the CLI. For errors from SSH, SSM, or the API, see [Troubleshooting in docs/ec2-tunnel.md](docs/ec2-tunnel.md#8-troubleshooting).
+These entries cover errors from the CLI. For errors from SSH, SSM, or the API, see [Troubleshooting in docs/ec2-tunnel/README.md](docs/ec2-tunnel/README.md#7-troubleshooting).
 
 **`Error: autossh is required. Please install it.`**
 Install the tool that the error names. For `autossh` on macOS: `brew install autossh`.
@@ -329,7 +330,7 @@ Install the tool that the error names. For `autossh` on macOS: `brew install aut
 Set `HostName` in the `Host` entry to the instance ID, for example `i-0123456789abcdef0`.
 
 **`No RemoteForward found for '<host>' in ~/.ssh/config`**
-Add a `RemoteForward` line to the `Host` entry. See the `Host` entry step in [docs/ec2-tunnel.md](docs/ec2-tunnel.md).
+Add a `RemoteForward` line to the `Host` entry. See [Add the Host entry](docs/ec2-tunnel/README.md#step-3-add-the-host-entry) in the guide.
 
 **`AWS credentials are not valid for profile '<profile>'`**
 The profile is not an SSO profile, and its credentials do not work. Run `aws configure list --profile <profile>` to check it.
@@ -338,7 +339,7 @@ The profile is not an SSO profile, and its credentials do not work. Run `aws con
 Another `ec2 tunnel` for the same host is still open, maybe in another terminal. Close it with Ctrl+C, or run the `kill <pid>` command that the error shows.
 
 **`Note: the forward binds to the instance loopback only`**
-Other hosts, such as the ALB, cannot reach the forwarded port. Set the bind address in `RemoteForward`, for example `0.0.0.0:8080`, and turn on `GatewayPorts` on the instance as described in [docs/ec2-tunnel.md](docs/ec2-tunnel.md).
+Other hosts, such as the ALB, cannot reach the forwarded port. Set the bind address in `RemoteForward`, for example `0.0.0.0:8080`. The instance also needs `GatewayPorts clientspecified`, which the [Terraform](docs/ec2-tunnel/terraform/) sets up.
 
 ### GCloud
 
@@ -369,7 +370,7 @@ Most `gce-ig` commands need `--region <region>`.
 | `services/gce.sh` | `gce` commands: list, SSH, SCP |
 | `services/gce_ig.sh` | `gce-ig` commands: list, describe, recreate, restart |
 | `test/` | Bash tests with mocks for `aws`, `ssh`, and `autossh`. They need no cloud credentials. |
-| `docs/ec2-tunnel.md` | EC2 tunnel guide: environment, required policies, setup, daily use, and troubleshooting. The diagram is in `docs/images/`. |
+| `docs/ec2-tunnel/` | EC2 tunnel guide (`README.md`), its diagram (`images/`), and the Terraform that deploys the AWS resources (`terraform/`). |
 
 ## 10) Development and testing
 

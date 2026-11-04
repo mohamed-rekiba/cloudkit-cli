@@ -1,0 +1,29 @@
+# Copy this file to terraform.tfvars, and replace the values.
+# Git ignores *.tfvars files.
+
+region = "us-east-1"
+name   = "ec2-tunnel"
+
+# The existing network and ALB.
+vpc_id                 = "vpc-0123456789abcdef0"
+subnet_id              = "subnet-0123456789abcdef0"
+alb_security_group_id  = "sg-0123456789abcdef0"
+alb_listener_arn       = "arn:aws:elasticloadbalancing:us-east-1:111122223333:listener/app/example-alb/0123456789abcdef/0123456789abcdef"
+listener_rule_priority = 100
+
+# Send only the tunnel path to the tunnel, not every request on the listener.
+# API Gateway adds the stage name to the path in a private integration, so
+# for the dev stage, /dev-tunnel/... reaches the ALB as /dev/dev-tunnel/...
+listener_rule_path_patterns = ["/dev/dev-tunnel/*"]
+
+tunnel_port = 8080
+
+# One entry for each developer: the output of
+#   cut -d' ' -f1,2 ~/.ssh/ec2_tunnel.pub
+developer_keys = {
+  alice = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExampleKeyForAliceOnly0000000000000000000"
+}
+
+tags = {
+  Purpose = "ec2-tunnel"
+}
